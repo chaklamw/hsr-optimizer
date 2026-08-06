@@ -1,0 +1,25 @@
+{
+  "name": "wuwa-project",
+  "version": "1.0.0",
+  "description": "git",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chaklamw/wuwa-project.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/chaklamw/wuwa-project/issues"
+  },
+  "homepage": "https://github.com/chaklamw/wuwa-project#readme",
+  "dependencies": {
+    "@babel/standalone": "^7.29.8",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  }
+}
