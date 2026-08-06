@@ -1,7 +1,9 @@
-export default function EchoPlanner({ onBack }) {
+import { Link } from 'react-router-dom';
+
+export default function EchoPlanner() {
   return (
     <div className="page-card">
-      <button className="back-btn" onClick={onBack}>&larr; Back</button>
+      <Link className="back-btn" to="/">&larr; Back</Link>
       <h1>Echo Planner</h1>
       <p className="subtitle">
         Stub for now. Specifics not decided yet.

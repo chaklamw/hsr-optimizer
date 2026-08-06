@@ -1,22 +1,21 @@
-import { useState } from 'react';
+import { Link } from 'react-router-dom';
 
-export default function Home({ onNavigate }) {
-
+export default function Home() {
   return (
     <div>
-      <h1>Wuthering Waves Project</h1>
+      <h1>WuWa Planner</h1>
       <p className="subtitle">Pick a tool to get started.</p>
 
       <div className="card-grid">
-        <button className="nav-card" onClick={() => onNavigate('pulls')}>
-          <h3>Pull History</h3>
-          <p>See your pull history and see upcoming banners.</p>
-        </button>
+        <Link className="nav-card" to="/summon-history">
+          <h3>Pull Tracking</h3>
+          <p>Track and review your actual pull history.</p>
+        </Link>
 
-        <button className="nav-card" onClick={() => onNavigate('echoes')}>
+        <Link className="nav-card" to="/echoes">
           <h3>Echo Calculator</h3>
           <p>Score a build against the theoretical optimal loadout.</p>
-        </button>
+        </Link>
       </div>
     </div>
   );
