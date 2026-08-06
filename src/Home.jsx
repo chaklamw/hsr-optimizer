@@ -7,7 +7,7 @@ export default function Home() {
       <p className="subtitle">Pick a tool to get started.</p>
 
       <div className="card-grid">
-        <Link className="nav-card" to="/summon-history">
+        <Link className="nav-card" to="/convenes">
           <h3>Pull Tracking</h3>
           <p>Track and review your actual pull history.</p>
         </Link>
