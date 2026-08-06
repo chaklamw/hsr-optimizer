@@ -1,10 +1,10 @@
 import { useState } from 'react';
 
-export default function HomePage({ onNavigate }) {
+export default function Home({ onNavigate }) {
 
   return (
     <div>
-      <h1>WuWa Planner</h1>
+      <h1>Wuthering Waves Project</h1>
       <p className="subtitle">Pick a tool to get started.</p>
 
       <div className="card-grid">
