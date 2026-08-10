@@ -52,18 +52,29 @@ export default function ProfilePage() {
       ) : (
         <>
           <p>{characters.length} showcased characters</p>
-          <ul>
+          <div className="character-grid">
             {characters.map((character) => {
               const info = characterNames[character.avatarId];
               const rawName = info ? info.name : `Unknown (${character.avatarId})`;
               const name = rawName === '{NICKNAME}' ? player.nickname : rawName;
+              const iconUrl = info
+                ? `https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/${info.icon}`
+                : null;
+
               return (
-                <li key={character.avatarId}>
-                  {name} — Level {character.level}
-                </li>
+                <div className="character-card" key={character.avatarId}>
+                  {iconUrl && <img className="character-icon" src={iconUrl} alt={name} />}
+                  <p className="character-name">{name}</p>
+                  <p className="character-level">Level {character.level}</p>
+                  {info && (
+                    <span className={`element-badge element-${info.element}`}>
+                      {info.element}
+                    </span>
+                  )}
+                </div>
               );
             })}
-          </ul>
+          </div>
         </>
       )}
     </div>
