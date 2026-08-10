@@ -125,6 +125,13 @@ h1 {
   font-size: 18px;
 }
 
+.set-summary {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
 .character-icon {
   width: 64px;
   height: 64px;
