@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 
 const CHARACTER_NAMES_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/characters.json';
 
@@ -37,25 +37,35 @@ export default function ProfilePage() {
   if (error) return <p className="status warn">{error}</p>;
 
   const player = data.detailInfo;
-  const characters = player.avatarDetailList;
+  const characters = player.avatarDetailList || [];
 
   return (
     <div>
+      <Link className="back-btn" to="/">&larr; Home</Link>
       <h1>{player.nickname}</h1>
       <p className="subtitle">UID: {data.uid}</p>
-      <p>{characters.length} showcased characters</p>
 
-      <ul>
-        {characters.map((character) => {
-          const info = characterNames[character.avatarId];
-          const name = info ? info.name : `Unknown (${character.avatarId})`;
-          return (
-            <li key={character.avatarId}>
-              {name} — Level {character.level}
-            </li>
-          );
-        })}
-      </ul>
+      {characters.length === 0 ? (
+        <p className="status warn">
+          This player hasn't enabled their character showcase, so there's nothing to display.
+        </p>
+      ) : (
+        <>
+          <p>{characters.length} showcased characters</p>
+          <ul>
+            {characters.map((character) => {
+              const info = characterNames[character.avatarId];
+              const rawName = info ? info.name : `Unknown (${character.avatarId})`;
+              const name = rawName === '{NICKNAME}' ? player.nickname : rawName;
+              return (
+                <li key={character.avatarId}>
+                  {name} — Level {character.level}
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
     </div>
   );
 }
