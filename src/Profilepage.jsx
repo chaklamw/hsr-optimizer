@@ -4,6 +4,15 @@ import { useParams, Link } from 'react-router-dom';
 const CHARACTER_NAMES_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/characters.json';
 const LIGHT_CONE_NAMES_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/light_cones.json';
 const RELIC_SETS_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/relic_sets.json';
+const SKILL_TREES_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/character_skill_trees.json';
+
+const ANCHOR_LABELS = {
+  Point01: 'Basic ATK',
+  Point02: 'Skill',
+  Point03: 'Ultimate',
+  Point04: 'Talent',
+  Point05: 'Technique',
+};
 
 const STAT_LABELS = {
   HPDelta: 'HP',
@@ -79,6 +88,7 @@ export default function ProfilePage() {
   const [characterNames, setCharacterNames] = useState({});
   const [lightConeNames, setLightConeNames] = useState({});
   const [relicSets, setRelicSets] = useState({});
+  const [skillTrees, setSkillTrees] = useState({});
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState(null);
@@ -92,8 +102,9 @@ export default function ProfilePage() {
       fetch(CHARACTER_NAMES_URL).then((res) => res.json()),
       fetch(LIGHT_CONE_NAMES_URL).then((res) => res.json()),
       fetch(RELIC_SETS_URL).then((res) => res.json()),
+      fetch(SKILL_TREES_URL).then((res) => res.json()),
     ])
-      .then(([playerJson, namesJson, lightConesJson, relicSetsJson]) => {
+      .then(([playerJson, namesJson, lightConesJson, relicSetsJson, skillTreesJson]) => {
         if (playerJson.error) {
           setError(playerJson.error);
         } else {
@@ -101,6 +112,7 @@ export default function ProfilePage() {
           setCharacterNames(namesJson);
           setLightConeNames(lightConesJson);
           setRelicSets(relicSetsJson);
+          setSkillTrees(skillTreesJson);
         }
         setLoading(false);
       })
@@ -163,10 +175,28 @@ export default function ProfilePage() {
               {activeCharacter.relicList && activeCharacter.relicList.length > 0 && (
                 <ul className="set-summary">
                   {activeCharacter.relicList.map((relic) => {
-                    const mainStat = relic._flat.props[0];
+                    const [mainStat, ...subStats] = relic._flat.props;
                     return (
                       <li key={relic.type}>
-                        {RELIC_TYPE_LABELS[relic.type]}: {formatStat(mainStat.type, mainStat.value)}
+                        <strong>{RELIC_TYPE_LABELS[relic.type]}:</strong> {formatStat(mainStat.type, mainStat.value)}
+                        {subStats.length > 0 && (
+                          <span className="substats">
+                            {' '}— {subStats.map((s) => formatStat(s.type, s.value)).join(', ')}
+                          </span>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {activeCharacter.skillTreeList && activeCharacter.skillTreeList.length > 0 && (
+                <ul className="set-summary">
+                  {activeCharacter.skillTreeList.map((point) => {
+                    const treeInfo = skillTrees[point.pointId];
+                    const label = treeInfo?.name || ANCHOR_LABELS[treeInfo?.anchor] || `Point ${point.pointId}`;
+                    return (
+                      <li key={point.pointId}>
+                        {label} (Lv.{point.level}{treeInfo?.max_level ? `/${treeInfo.max_level}` : ''})
                       </li>
                     );
                   })}
