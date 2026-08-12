@@ -68,30 +68,27 @@ function computeFinalStats(character, promotions, relicSets, skillTrees, lightCo
 
   const level = character.level;
   const baseHP = promoData.hp.base + promoData.hp.step * (level - 1);
-  console.log('HP base (character):', baseHP);
   const baseATK = promoData.atk.base + promoData.atk.step * (level - 1);
   const baseDEF = promoData.def.base + promoData.def.step * (level - 1);
   const baseSPD = promoData.spd.base + promoData.spd.step * (level - 1);
 
   let flatHP = 0, flatATK = 0, flatDEF = 0, flatSPD = 0;
+  let lcBaseHP = 0, lcBaseATK = 0, lcBaseDEF = 0;
   let pctHP = 0, pctATK = 0, pctDEF = 0, pctSPD = 0;
   let critRate = promoData.crit_rate.base;
   let critDmg = promoData.crit_dmg.base;
 
   if (character.equipment) {
     character.equipment._flat.props.forEach((p) => {
-      if (p.type === 'BaseHP') { flatHP += p.value; console.log('HP from light cone base:', p.value); }
-      if (p.type === 'BaseAttack') flatATK += p.value;
-      if (p.type === 'BaseDefence') flatDEF += p.value;
+      if (p.type === 'BaseHP') lcBaseHP += p.value;
+      if (p.type === 'BaseAttack') lcBaseATK += p.value;
+      if (p.type === 'BaseDefence') lcBaseDEF += p.value;
     });
   }
 
   const genericStats = {};
 
   function applyProp(p) {
-    if (p.type === 'HPDelta' || p.type === 'HPAddedRatio') {
-      console.log('HP contribution:', p.type, p.value);
-    }
     switch (p.type) {
       case 'HPDelta': flatHP += p.value; break;
       case 'AttackDelta': flatATK += p.value; break;
@@ -142,13 +139,11 @@ function computeFinalStats(character, promotions, relicSets, skillTrees, lightCo
     }
   });
 
-  console.log('HP totals: flatHP=', flatHP, 'pctHP=', pctHP, 'final=', (baseHP + flatHP) * (1 + pctHP));
-
   return {
-    hp: Math.round((baseHP + flatHP) * (1 + pctHP)),
-    atk: Math.round((baseATK + flatATK) * (1 + pctATK)),
-    def: Math.round((baseDEF + flatDEF) * (1 + pctDEF)),
-    spd: Math.round((baseSPD + flatSPD) * (1 + pctSPD) * 10) / 10,
+    hp: Math.round((baseHP + lcBaseHP) * (1 + pctHP) + flatHP),
+    atk: Math.round((baseATK + lcBaseATK) * (1 + pctATK) + flatATK),
+    def: Math.round((baseDEF + lcBaseDEF) * (1 + pctDEF) + flatDEF),
+    spd: Math.round((baseSPD * (1 + pctSPD) + flatSPD) * 10) / 10,
     critRate: (critRate * 100).toFixed(1),
     critDmg: (critDmg * 100).toFixed(1),
     genericStats,
