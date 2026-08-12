@@ -5,6 +5,8 @@ const CHARACTER_NAMES_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailR
 const LIGHT_CONE_NAMES_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/light_cones.json';
 const RELIC_SETS_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/relic_sets.json';
 const SKILL_TREES_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/character_skill_trees.json';
+const CHARACTER_PROMOTIONS_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/character_promotions.json';
+const LIGHT_CONE_RANKS_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/light_cone_ranks.json';
 
 const ANCHOR_LABELS = {
   Point01: 'Basic ATK',
@@ -60,6 +62,99 @@ const RELIC_TYPE_LABELS = {
   6: 'Link Rope',
 };
 
+function computeFinalStats(character, promotions, relicSets, skillTrees, lightConeRanks) {
+  const promoData = promotions[character.avatarId]?.values?.[character.promotion];
+  if (!promoData) return null;
+
+  const level = character.level;
+  const baseHP = promoData.hp.base + promoData.hp.step * (level - 1);
+  console.log('HP base (character):', baseHP);
+  const baseATK = promoData.atk.base + promoData.atk.step * (level - 1);
+  const baseDEF = promoData.def.base + promoData.def.step * (level - 1);
+  const baseSPD = promoData.spd.base + promoData.spd.step * (level - 1);
+
+  let flatHP = 0, flatATK = 0, flatDEF = 0, flatSPD = 0;
+  let pctHP = 0, pctATK = 0, pctDEF = 0, pctSPD = 0;
+  let critRate = promoData.crit_rate.base;
+  let critDmg = promoData.crit_dmg.base;
+
+  if (character.equipment) {
+    character.equipment._flat.props.forEach((p) => {
+      if (p.type === 'BaseHP') { flatHP += p.value; console.log('HP from light cone base:', p.value); }
+      if (p.type === 'BaseAttack') flatATK += p.value;
+      if (p.type === 'BaseDefence') flatDEF += p.value;
+    });
+  }
+
+  const genericStats = {};
+
+  function applyProp(p) {
+    if (p.type === 'HPDelta' || p.type === 'HPAddedRatio') {
+      console.log('HP contribution:', p.type, p.value);
+    }
+    switch (p.type) {
+      case 'HPDelta': flatHP += p.value; break;
+      case 'AttackDelta': flatATK += p.value; break;
+      case 'DefenceDelta': flatDEF += p.value; break;
+      case 'SpeedDelta': flatSPD += p.value; break;
+      case 'HPAddedRatio': pctHP += p.value; break;
+      case 'AttackAddedRatio': pctATK += p.value; break;
+      case 'DefenceAddedRatio': pctDEF += p.value; break;
+      case 'SpeedAddedRatio': pctSPD += p.value; break;
+      case 'CriticalChance': case 'CriticalChanceBase': critRate += p.value; break;
+      case 'CriticalDamage': case 'CriticalDamageBase': critDmg += p.value; break;
+      default:
+        genericStats[p.type] = (genericStats[p.type] || 0) + p.value;
+    }
+  }
+
+  (character.relicList || []).forEach((relic) => {
+    relic._flat.props.forEach((p) => applyProp(p));
+  });
+
+  if (character.equipment) {
+    const rankData = lightConeRanks[character.equipment.tid];
+    const rankProps = rankData?.properties?.[character.equipment.rank - 1];
+    if (rankProps) {
+      rankProps.forEach((p) => applyProp(p));
+    }
+  }
+
+  const setCounts = {};
+  (character.relicList || []).forEach((relic) => {
+    const setID = relic._flat.setID;
+    setCounts[setID] = (setCounts[setID] || 0) + 1;
+  });
+
+  Object.entries(setCounts).forEach(([setID, count]) => {
+    const set = relicSets[setID];
+    if (!set || !set.properties) return;
+    if (count >= 2 && set.properties[0]) set.properties[0].forEach((p) => applyProp(p));
+    if (count >= 4 && set.properties[1]) set.properties[1].forEach((p) => applyProp(p));
+  });
+
+  (character.skillTreeList || []).forEach((point) => {
+    const node = skillTrees[point.pointId];
+    if (!node || !node.levels) return;
+    const levelData = node.levels[point.level - 1];
+    if (levelData && levelData.properties) {
+      levelData.properties.forEach((p) => applyProp(p));
+    }
+  });
+
+  console.log('HP totals: flatHP=', flatHP, 'pctHP=', pctHP, 'final=', (baseHP + flatHP) * (1 + pctHP));
+
+  return {
+    hp: Math.round((baseHP + flatHP) * (1 + pctHP)),
+    atk: Math.round((baseATK + flatATK) * (1 + pctATK)),
+    def: Math.round((baseDEF + flatDEF) * (1 + pctDEF)),
+    spd: Math.round((baseSPD + flatSPD) * (1 + pctSPD) * 10) / 10,
+    critRate: (critRate * 100).toFixed(1),
+    critDmg: (critDmg * 100).toFixed(1),
+    genericStats,
+  };
+}
+
 function getSetSummary(relicList, relicSets) {
   const counts = {};
   relicList.forEach((relic) => {
@@ -89,6 +184,8 @@ export default function ProfilePage() {
   const [lightConeNames, setLightConeNames] = useState({});
   const [relicSets, setRelicSets] = useState({});
   const [skillTrees, setSkillTrees] = useState({});
+  const [characterPromotions, setCharacterPromotions] = useState({});
+  const [lightConeRanks, setLightConeRanks] = useState({});
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState(null);
@@ -103,8 +200,10 @@ export default function ProfilePage() {
       fetch(LIGHT_CONE_NAMES_URL).then((res) => res.json()),
       fetch(RELIC_SETS_URL).then((res) => res.json()),
       fetch(SKILL_TREES_URL).then((res) => res.json()),
+      fetch(CHARACTER_PROMOTIONS_URL).then((res) => res.json()),
+      fetch(LIGHT_CONE_RANKS_URL).then((res) => res.json()),
     ])
-      .then(([playerJson, namesJson, lightConesJson, relicSetsJson, skillTreesJson]) => {
+      .then(([playerJson, namesJson, lightConesJson, relicSetsJson, skillTreesJson, promotionsJson, lightConeRanksJson]) => {
         if (playerJson.error) {
           setError(playerJson.error);
         } else {
@@ -113,6 +212,8 @@ export default function ProfilePage() {
           setLightConeNames(lightConesJson);
           setRelicSets(relicSetsJson);
           setSkillTrees(skillTreesJson);
+          setCharacterPromotions(promotionsJson);
+          setLightConeRanks(lightConeRanksJson);
         }
         setLoading(false);
       })
@@ -133,6 +234,9 @@ export default function ProfilePage() {
   const activeSetSummary = activeCharacter
     ? getSetSummary(activeCharacter.relicList || [], relicSets)
     : [];
+  const activeStats = activeCharacter
+    ? computeFinalStats(activeCharacter, characterPromotions, relicSets, skillTrees, lightConeRanks)
+    : null;
 
   return (
     <div>
@@ -161,6 +265,19 @@ export default function ProfilePage() {
                 <p className="subtitle">
                   {lightConeNames[activeCharacter.equipment.tid]?.name || 'Unknown Light Cone'} · Superimposition {activeCharacter.equipment.rank}
                 </p>
+              )}
+              {activeStats && (
+                <ul className="set-summary">
+                  <li>HP: {activeStats.hp}</li>
+                  <li>ATK: {activeStats.atk}</li>
+                  <li>DEF: {activeStats.def}</li>
+                  <li>SPD: {activeStats.spd}</li>
+                  <li>CRIT Rate: {activeStats.critRate}%</li>
+                  <li>CRIT DMG: {activeStats.critDmg}%</li>
+                  {Object.entries(activeStats.genericStats).map(([type, value]) => (
+                    <li key={type}>{formatStat(type, value)}</li>
+                  ))}
+                </ul>
               )}
               {activeSetSummary.length > 0 && (
                 <ul className="set-summary">
