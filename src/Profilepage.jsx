@@ -62,6 +62,8 @@ const RELIC_TYPE_LABELS = {
   6: 'Link Rope',
 };
 
+const TOTAL_REQUESTS = 7;
+
 function computeFinalStats(character, promotions, relicSets, skillTrees, lightConeRanks) {
   const promoData = promotions[character.avatarId]?.values?.[character.promotion];
   if (!promoData) return null;
@@ -183,20 +185,31 @@ export default function ProfilePage() {
   const [lightConeRanks, setLightConeRanks] = useState({});
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadedCount, setLoadedCount] = useState(0);
   const [selectedId, setSelectedId] = useState(null);
 
   useEffect(() => {
     setLoading(true);
     setError(null);
+    setLoadedCount(0);
+
+    function trackedFetch(url) {
+      return fetch(url)
+        .then((res) => res.json())
+        .then((data) => {
+          setLoadedCount((count) => count + 1);
+          return data;
+        });
+    }
 
     Promise.all([
-      fetch(`http://localhost:3001/api/hsr/${uid}`).then((res) => res.json()),
-      fetch(CHARACTER_NAMES_URL).then((res) => res.json()),
-      fetch(LIGHT_CONE_NAMES_URL).then((res) => res.json()),
-      fetch(RELIC_SETS_URL).then((res) => res.json()),
-      fetch(SKILL_TREES_URL).then((res) => res.json()),
-      fetch(CHARACTER_PROMOTIONS_URL).then((res) => res.json()),
-      fetch(LIGHT_CONE_RANKS_URL).then((res) => res.json()),
+      trackedFetch(`http://localhost:3001/api/hsr/${uid}`),
+      trackedFetch(CHARACTER_NAMES_URL),
+      trackedFetch(LIGHT_CONE_NAMES_URL),
+      trackedFetch(RELIC_SETS_URL),
+      trackedFetch(SKILL_TREES_URL),
+      trackedFetch(CHARACTER_PROMOTIONS_URL),
+      trackedFetch(LIGHT_CONE_RANKS_URL),
     ])
       .then(([playerJson, namesJson, lightConesJson, relicSetsJson, skillTreesJson, promotionsJson, lightConeRanksJson]) => {
         if (playerJson.error) {
@@ -218,7 +231,17 @@ export default function ProfilePage() {
       });
   }, [uid]);
 
-  if (loading) return <p style={{ padding: 24 }}>Loading...</p>;
+  if (loading) {
+    const percent = Math.round((loadedCount / TOTAL_REQUESTS) * 100);
+    return (
+      <div className="loading-wrap">
+        <p className="subtitle">Loading profile... {loadedCount}/{TOTAL_REQUESTS}</p>
+        <div className="loading-track">
+          <div className="loading-fill" style={{ width: `${percent}%` }} />
+        </div>
+      </div>
+    );
+  }
   if (error) return <p className="status warn" style={{ padding: 24 }}>{error}</p>;
 
   const player = data.detailInfo;

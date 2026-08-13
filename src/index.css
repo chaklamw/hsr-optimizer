@@ -214,6 +214,27 @@ h1 {
   padding: 24px;
 }
 
+.loading-wrap {
+  max-width: 340px;
+  margin: 80px auto;
+  text-align: center;
+}
+
+.loading-track {
+  height: 8px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-top: 10px;
+}
+
+.loading-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-soft), var(--accent));
+  transition: width 0.2s ease;
+}
+
 .profile-nav {
   display: flex;
   margin-bottom: 24px;
