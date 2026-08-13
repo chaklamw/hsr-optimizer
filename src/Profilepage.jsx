@@ -249,6 +249,36 @@ export default function ProfilePage() {
         </p>
       ) : (
         <>
+          <p>{characters.length} showcased characters</p>
+          <div className="character-grid">
+            {characters.map((character) => {
+              const info = characterNames[character.avatarId];
+              const rawName = info ? info.name : `Unknown (${character.avatarId})`;
+              const name = rawName === '{NICKNAME}' ? player.nickname : rawName;
+              const iconUrl = info
+                ? `https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/${info.icon}`
+                : null;
+              const isSelected = character.avatarId === activeId;
+
+              return (
+                <div
+                  className={`character-card${isSelected ? ' selected' : ''}${info ? ` rarity-${info.rarity}` : ''}`}
+                  key={character.avatarId}
+                  onClick={() => setSelectedId(character.avatarId)}
+                >
+                  {iconUrl && <img className="character-icon" src={iconUrl} alt={name} />}
+                  <p className="character-name">{name}</p>
+                  <p className="character-level">Level {character.level}</p>
+                  {info && (
+                    <span className={`element-badge element-${info.element}`}>
+                      {info.element}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
           {activeCharacter && (
             <div className="detail-panel">
               <h2>
@@ -320,36 +350,6 @@ export default function ProfilePage() {
               )}
             </div>
           )}
-
-          <p>{characters.length} showcased characters</p>
-          <div className="character-grid">
-            {characters.map((character) => {
-              const info = characterNames[character.avatarId];
-              const rawName = info ? info.name : `Unknown (${character.avatarId})`;
-              const name = rawName === '{NICKNAME}' ? player.nickname : rawName;
-              const iconUrl = info
-                ? `https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/${info.icon}`
-                : null;
-              const isSelected = character.avatarId === activeId;
-
-              return (
-                <div
-                  className={`character-card${isSelected ? ' selected' : ''}${info ? ` rarity-${info.rarity}` : ''}`}
-                  key={character.avatarId}
-                  onClick={() => setSelectedId(character.avatarId)}
-                >
-                  {iconUrl && <img className="character-icon" src={iconUrl} alt={name} />}
-                  <p className="character-name">{name}</p>
-                  <p className="character-level">Level {character.level}</p>
-                  {info && (
-                    <span className={`element-badge element-${info.element}`}>
-                      {info.element}
-                    </span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
         </>
       )}
       </div>
