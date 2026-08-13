@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 
 const CHARACTER_NAMES_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/characters.json';
@@ -187,8 +187,11 @@ export default function ProfilePage() {
   const [loading, setLoading] = useState(true);
   const [loadedCount, setLoadedCount] = useState(0);
   const [selectedId, setSelectedId] = useState(null);
+  const cardRefs = useRef({});
+  const trackRef = useRef(null);
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     setError(null);
     setLoadedCount(0);
@@ -197,7 +200,7 @@ export default function ProfilePage() {
       return fetch(url)
         .then((res) => res.json())
         .then((data) => {
-          setLoadedCount((count) => count + 1);
+          if (!cancelled) setLoadedCount((count) => count + 1);
           return data;
         });
     }
@@ -212,6 +215,7 @@ export default function ProfilePage() {
       trackedFetch(LIGHT_CONE_RANKS_URL),
     ])
       .then(([playerJson, namesJson, lightConesJson, relicSetsJson, skillTreesJson, promotionsJson, lightConeRanksJson]) => {
+        if (cancelled) return;
         if (playerJson.error) {
           setError(playerJson.error);
         } else {
@@ -226,10 +230,25 @@ export default function ProfilePage() {
         setLoading(false);
       })
       .catch(() => {
+        if (cancelled) return;
         setError('Something went wrong fetching this profile.');
         setLoading(false);
       });
+
+    return () => {
+      cancelled = true;
+    };
   }, [uid]);
+
+  useEffect(() => {
+    if (selectedId != null) {
+      cardRefs.current[selectedId]?.scrollIntoView({
+        behavior: 'smooth',
+        inline: 'center',
+        block: 'nearest',
+      });
+    }
+  }, [selectedId]);
 
   if (loading) {
     const percent = Math.round((loadedCount / TOTAL_REQUESTS) * 100);
@@ -273,7 +292,16 @@ export default function ProfilePage() {
       ) : (
         <>
           <p>{characters.length} showcased characters</p>
-          <div className="character-grid">
+          <div
+            className="character-grid"
+            ref={trackRef}
+            onWheel={(event) => {
+              if (event.deltaY !== 0) {
+                event.preventDefault();
+                event.currentTarget.scrollLeft += event.deltaY;
+              }
+            }}
+          >
             {characters.map((character) => {
               const info = characterNames[character.avatarId];
               const rawName = info ? info.name : `Unknown (${character.avatarId})`;
@@ -285,6 +313,7 @@ export default function ProfilePage() {
 
               return (
                 <div
+                  ref={(el) => (cardRefs.current[character.avatarId] = el)}
                   className={`character-card${isSelected ? ' selected' : ''}${info ? ` rarity-${info.rarity}` : ''}`}
                   key={character.avatarId}
                   onClick={() => setSelectedId(character.avatarId)}
