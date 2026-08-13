@@ -218,8 +218,8 @@ export default function ProfilePage() {
       });
   }, [uid]);
 
-  if (loading) return <p>Loading...</p>;
-  if (error) return <p className="status warn">{error}</p>;
+  if (loading) return <p style={{ padding: 24 }}>Loading...</p>;
+  if (error) return <p className="status warn" style={{ padding: 24 }}>{error}</p>;
 
   const player = data.detailInfo;
   const characters = player.avatarDetailList || [];
@@ -234,10 +234,14 @@ export default function ProfilePage() {
     : null;
 
   return (
-    <div>
-      <Link className="back-btn" to="/">&larr; Home</Link>
-      <h1>{player.nickname}</h1>
-      <p className="subtitle">UID: {data.uid}</p>
+    <div className="profile-page">
+      <div className="profile-nav">
+        <Link className="back-btn" to="/">&larr; Home</Link>
+      </div>
+
+      <div className="profile-content">
+        <h1>{player.nickname}</h1>
+        <p className="subtitle">UID: {data.uid}</p>
 
       {characters.length === 0 ? (
         <p className="status warn">
@@ -330,7 +334,7 @@ export default function ProfilePage() {
 
               return (
                 <div
-                  className={`character-card${isSelected ? ' selected' : ''}`}
+                  className={`character-card${isSelected ? ' selected' : ''}${info ? ` rarity-${info.rarity}` : ''}`}
                   key={character.avatarId}
                   onClick={() => setSelectedId(character.avatarId)}
                 >
@@ -348,6 +352,7 @@ export default function ProfilePage() {
           </div>
         </>
       )}
+      </div>
     </div>
   );
 }
