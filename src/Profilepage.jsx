@@ -241,6 +241,21 @@ export default function ProfilePage() {
   }, [uid]);
 
   useEffect(() => {
+    const track = trackRef.current;
+    if (!track) return;
+
+    function handleWheel(event) {
+      if (event.deltaY !== 0) {
+        event.preventDefault();
+        track.scrollBy({ left: event.deltaY, behavior: 'smooth' });
+      }
+    }
+
+    track.addEventListener('wheel', handleWheel, { passive: false });
+    return () => track.removeEventListener('wheel', handleWheel);
+  }, [data]);
+
+  useEffect(() => {
     if (selectedId != null) {
       cardRefs.current[selectedId]?.scrollIntoView({
         behavior: 'smooth',
@@ -249,6 +264,13 @@ export default function ProfilePage() {
       });
     }
   }, [selectedId]);
+
+  useEffect(() => {
+    if (data && selectedId == null) {
+      const firstId = data.detailInfo?.avatarDetailList?.[0]?.avatarId;
+      if (firstId != null) setSelectedId(firstId);
+    }
+  }, [data]);
 
   if (loading) {
     const percent = Math.round((loadedCount / TOTAL_REQUESTS) * 100);
@@ -268,6 +290,17 @@ export default function ProfilePage() {
   const activeId = selectedId ?? characters[0]?.avatarId;
   const activeCharacter = characters.find((c) => c.avatarId === activeId);
   const activeInfo = activeCharacter ? characterNames[activeCharacter.avatarId] : null;
+
+  const cloneCount = Math.min(2, characters.length);
+  const displayCharacters =
+    characters.length > cloneCount
+      ? [
+          ...characters.slice(-cloneCount).map((c) => ({ ...c, cloneKey: `clone-start-${c.avatarId}` })),
+          ...characters.map((c) => ({ ...c, cloneKey: `${c.avatarId}` })),
+          ...characters.slice(0, cloneCount).map((c) => ({ ...c, cloneKey: `clone-end-${c.avatarId}` })),
+        ]
+      : characters.map((c) => ({ ...c, cloneKey: `${c.avatarId}` }));
+
   const activeSetSummary = activeCharacter
     ? getSetSummary(activeCharacter.relicList || [], relicSets)
     : [];
@@ -292,17 +325,8 @@ export default function ProfilePage() {
       ) : (
         <>
           <p>{characters.length} showcased characters</p>
-          <div
-            className="character-grid"
-            ref={trackRef}
-            onWheel={(event) => {
-              if (event.deltaY !== 0) {
-                event.preventDefault();
-                event.currentTarget.scrollLeft += event.deltaY;
-              }
-            }}
-          >
-            {characters.map((character) => {
+          <div className="character-grid" ref={trackRef}>
+            {displayCharacters.map((character) => {
               const info = characterNames[character.avatarId];
               const rawName = info ? info.name : `Unknown (${character.avatarId})`;
               const name = rawName === '{NICKNAME}' ? player.nickname : rawName;
@@ -313,9 +337,9 @@ export default function ProfilePage() {
 
               return (
                 <div
-                  ref={(el) => (cardRefs.current[character.avatarId] = el)}
+                  ref={(el) => (cardRefs.current[character.cloneKey] = el)}
                   className={`character-card${isSelected ? ' selected' : ''}${info ? ` rarity-${info.rarity}` : ''}`}
-                  key={character.avatarId}
+                  key={character.cloneKey}
                   onClick={() => setSelectedId(character.avatarId)}
                 >
                   {iconUrl && <img className="character-icon" src={iconUrl} alt={name} />}
