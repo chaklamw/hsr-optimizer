@@ -267,7 +267,13 @@ h1 {
   overflow-x: auto;
   scroll-snap-type: x mandatory;
   padding: 24px calc(50% - 70px);
-  margin: 16px -24px 0;
+  margin-top: 16px;
+  width: 100vw;
+  position: relative;
+  left: 50%;
+  right: 50%;
+  margin-left: -50vw;
+  margin-right: -50vw;
   scrollbar-width: none;
 }
 

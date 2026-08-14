@@ -291,15 +291,7 @@ export default function ProfilePage() {
   const activeCharacter = characters.find((c) => c.avatarId === activeId);
   const activeInfo = activeCharacter ? characterNames[activeCharacter.avatarId] : null;
 
-  const cloneCount = Math.min(2, characters.length);
-  const displayCharacters =
-    characters.length > cloneCount
-      ? [
-          ...characters.slice(-cloneCount).map((c) => ({ ...c, cloneKey: `clone-start-${c.avatarId}` })),
-          ...characters.map((c) => ({ ...c, cloneKey: `${c.avatarId}` })),
-          ...characters.slice(0, cloneCount).map((c) => ({ ...c, cloneKey: `clone-end-${c.avatarId}` })),
-        ]
-      : characters.map((c) => ({ ...c, cloneKey: `${c.avatarId}` }));
+  const displayCharacters = characters;
 
   const activeSetSummary = activeCharacter
     ? getSetSummary(activeCharacter.relicList || [], relicSets)
@@ -337,9 +329,9 @@ export default function ProfilePage() {
 
               return (
                 <div
-                  ref={(el) => (cardRefs.current[character.cloneKey] = el)}
+                  ref={(el) => (cardRefs.current[character.avatarId] = el)}
                   className={`character-card${isSelected ? ' selected' : ''}${info ? ` rarity-${info.rarity}` : ''}`}
-                  key={character.cloneKey}
+                  key={character.avatarId}
                   onClick={() => setSelectedId(character.avatarId)}
                 >
                   {iconUrl && <img className="character-icon" src={iconUrl} alt={name} />}
