@@ -172,28 +172,6 @@ function computeFinalStats(character, promotions, relicSets, skillTrees, lightCo
   };
 }
 
-function getSetSummary(relicList, relicSets) {
-  const counts = {};
-  relicList.forEach((relic) => {
-    const setID = relic._flat.setID;
-    counts[setID] = (counts[setID] || 0) + 1;
-  });
-
-  const summary = [];
-  Object.entries(counts).forEach(([setID, count]) => {
-    const set = relicSets[setID];
-    if (!set) return;
-
-    if (count >= 4 && set.desc[1]) {
-      summary.push({ name: set.name, piece: '4pc', desc: set.desc[1] });
-    } else if (count >= 2 && set.desc[0]) {
-      summary.push({ name: set.name, piece: '2pc', desc: set.desc[0] });
-    }
-  });
-
-  return summary;
-}
-
 export default function ProfilePage() {
   const { uid } = useParams();
   const [data, setData] = useState(null);
@@ -313,9 +291,6 @@ export default function ProfilePage() {
 
   const displayCharacters = characters;
 
-  const activeSetSummary = activeCharacter
-    ? getSetSummary(activeCharacter.relicList || [], relicSets)
-    : [];
   const activeStats = activeCharacter
     ? computeFinalStats(activeCharacter, characterPromotions, relicSets, skillTrees, lightConeRanks)
     : null;
@@ -445,6 +420,11 @@ export default function ProfilePage() {
                     <ul className="relic-list">
                       {activeCharacter.relicList.map((relic) => {
                         const [mainStat, ...subStats] = relic._flat.props;
+                        const setID = relic._flat.setID;
+                        const set = relicSets[setID];
+                        const setCount = activeCharacter.relicList.filter(
+                          (r) => r._flat.setID === setID
+                        ).length;
                         return (
                           <li className="relic-item" key={relic.type}>
                             <img
@@ -459,6 +439,13 @@ export default function ProfilePage() {
                                   {' '}— {subStats.map((s) => formatStat(s.type, s.value)).join(', ')}
                                 </span>
                               )}
+                              {set && (
+                                <div className="relic-set-info">
+                                  <strong>{set.name}</strong> ({setCount} equipped)
+                                  {setCount >= 2 && set.desc[0] && <p>2pc: {set.desc[0]}</p>}
+                                  {setCount >= 4 && set.desc[1] && <p>4pc: {set.desc[1]}</p>}
+                                </div>
+                              )}
                             </div>
                           </li>
                         );
@@ -467,19 +454,6 @@ export default function ProfilePage() {
                   </div>
                 )}
               </div>
-
-              {activeSetSummary.length > 0 && (
-                <div className="detail-section">
-                  <h3>Relic Sets</h3>
-                  <ul className="set-summary">
-                    {activeSetSummary.map((set, index) => (
-                      <li key={index}>
-                        {set.piece} {set.name} — {set.desc}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
 
               {activeCharacter.skillTreeList && activeCharacter.skillTreeList.length > 0 && (
                 <div className="detail-section">
