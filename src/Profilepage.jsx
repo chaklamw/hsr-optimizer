@@ -7,6 +7,7 @@ const RELIC_SETS_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/ma
 const SKILL_TREES_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/character_skill_trees.json';
 const CHARACTER_PROMOTIONS_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/character_promotions.json';
 const LIGHT_CONE_RANKS_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/light_cone_ranks.json';
+const PATHS_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/paths.json';
 
 const ANCHOR_LABELS = {
   Point01: 'Basic ATK',
@@ -24,6 +25,7 @@ const STAT_LABELS = {
   DefenceDelta: 'DEF',
   DefenceAddedRatio: 'DEF%',
   SpeedDelta: 'SPD',
+  SpeedAddedRatio: 'SPD',
   CriticalChance: 'CRIT Rate',
   CriticalChanceBase: 'CRIT Rate',
   CriticalDamage: 'CRIT DMG',
@@ -31,11 +33,16 @@ const STAT_LABELS = {
   StatusProbability: 'Effect Hit Rate',
   StatusProbabilityBase: 'Effect Hit Rate',
   StatusResistance: 'Effect RES',
+  StatusResistanceBase: 'Effect RES',
   HealRatio: 'Outgoing Healing',
   HealRatioBase: 'Outgoing Healing',
+  HealTakenRatio: 'Incoming Healing',
+  SPRatio: 'Energy Regen',
   SPRatioBase: 'Energy Regen',
+  MaxSP: 'Max Energy',
   BreakDamageAddedRatio: 'Break Effect',
   BreakDamageAddedRatioBase: 'Break Effect',
+  AllDamageTypeAddedRatio: 'DMG Boost',
   PhysicalAddedRatio: 'Physical DMG',
   FireAddedRatio: 'Fire DMG',
   IceAddedRatio: 'Ice DMG',
@@ -43,11 +50,52 @@ const STAT_LABELS = {
   WindAddedRatio: 'Wind DMG',
   QuantumAddedRatio: 'Quantum DMG',
   ImaginaryAddedRatio: 'Imaginary DMG',
+  ElationDamageAddedRatio: 'Elation',
+  ElationDamageAddedRatioBase: 'Elation',
+  PhysicalResistance: 'Physical RES',
+  PhysicalResistanceDelta: 'Physical RES',
+  FireResistance: 'Fire RES',
+  FireResistanceDelta: 'Fire RES',
+  IceResistance: 'Ice RES',
+  IceResistanceDelta: 'Ice RES',
+  ThunderResistance: 'Lightning RES',
+  ThunderResistanceDelta: 'Lightning RES',
+  WindResistance: 'Wind RES',
+  WindResistanceDelta: 'Wind RES',
+  QuantumResistance: 'Quantum RES',
+  QuantumResistanceDelta: 'Quantum RES',
+  ImaginaryResistance: 'Imaginary RES',
+  ImaginaryResistanceDelta: 'Imaginary RES',
+};
+
+// Only these represent genuinely flat point values (e.g. "+42" HP).
+// Every other property that reaches genericStats is a percentage,
+// even ones with "Delta" in the name (e.g. PhysicalResistanceDelta).
+const FLAT_STAT_TYPES = new Set(['HPDelta', 'AttackDelta', 'DefenceDelta', 'SpeedDelta']);
+
+// Some stats are exposed under two different property IDs depending on
+// their source (e.g. a trace node vs. a relic substat) but represent the
+// same displayed total. Redirect the alternate ID to a single canonical
+// one so they get summed together instead of showing as duplicate rows.
+const CANONICAL_STAT_TYPE = {
+  StatusProbabilityBase: 'StatusProbability',
+  StatusResistanceBase: 'StatusResistance',
+  HealRatioBase: 'HealRatio',
+  BreakDamageAddedRatioBase: 'BreakDamageAddedRatio',
+  SPRatioBase: 'SPRatio',
+  ElationDamageAddedRatioBase: 'ElationDamageAddedRatio',
+  PhysicalResistanceDelta: 'PhysicalResistance',
+  FireResistanceDelta: 'FireResistance',
+  IceResistanceDelta: 'IceResistance',
+  ThunderResistanceDelta: 'ThunderResistance',
+  WindResistanceDelta: 'WindResistance',
+  QuantumResistanceDelta: 'QuantumResistance',
+  ImaginaryResistanceDelta: 'ImaginaryResistance',
 };
 
 function formatStat(property, value) {
   const label = STAT_LABELS[property] || property;
-  if (property.includes('Delta')) {
+  if (FLAT_STAT_TYPES.has(property)) {
     return `${label} +${Math.round(value * 10) / 10}`;
   }
   return `${label} +${(value * 100).toFixed(1)}%`;
@@ -82,7 +130,7 @@ function formatLightConeDesc(desc, params) {
   });
 }
 
-const TOTAL_REQUESTS = 7;
+const TOTAL_REQUESTS = 8;
 
 function computeFinalStats(character, promotions, relicSets, skillTrees, lightConeRanks) {
   const promoData = promotions[character.avatarId]?.values?.[character.promotion];
@@ -122,8 +170,10 @@ function computeFinalStats(character, promotions, relicSets, skillTrees, lightCo
       case 'SpeedAddedRatio': pctSPD += p.value; break;
       case 'CriticalChance': case 'CriticalChanceBase': critRate += p.value; break;
       case 'CriticalDamage': case 'CriticalDamageBase': critDmg += p.value; break;
-      default:
-        genericStats[p.type] = (genericStats[p.type] || 0) + p.value;
+      default: {
+        const key = CANONICAL_STAT_TYPE[p.type] || p.type;
+        genericStats[key] = (genericStats[key] || 0) + p.value;
+      }
     }
   }
 
@@ -181,6 +231,7 @@ export default function ProfilePage() {
   const [skillTrees, setSkillTrees] = useState({});
   const [characterPromotions, setCharacterPromotions] = useState({});
   const [lightConeRanks, setLightConeRanks] = useState({});
+  const [paths, setPaths] = useState({});
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadedCount, setLoadedCount] = useState(0);
@@ -211,8 +262,9 @@ export default function ProfilePage() {
       trackedFetch(SKILL_TREES_URL),
       trackedFetch(CHARACTER_PROMOTIONS_URL),
       trackedFetch(LIGHT_CONE_RANKS_URL),
+      trackedFetch(PATHS_URL),
     ])
-      .then(([playerJson, namesJson, lightConesJson, relicSetsJson, skillTreesJson, promotionsJson, lightConeRanksJson]) => {
+      .then(([playerJson, namesJson, lightConesJson, relicSetsJson, skillTreesJson, promotionsJson, lightConeRanksJson, pathsJson]) => {
         if (cancelled) return;
         if (playerJson.error) {
           setError(playerJson.error);
@@ -224,6 +276,7 @@ export default function ProfilePage() {
           setSkillTrees(skillTreesJson);
           setCharacterPromotions(promotionsJson);
           setLightConeRanks(lightConeRanksJson);
+          setPaths(pathsJson);
         }
         setLoading(false);
       })
@@ -357,7 +410,7 @@ export default function ProfilePage() {
                     {activeInfo?.name === '{NICKNAME}' ? player.nickname : activeInfo?.name || 'Unknown'}
                   </h2>
                   <p className="subtitle">
-                    Level {activeCharacter.level} · {activeInfo?.path} · {activeInfo?.element}
+                    Level {activeCharacter.level} · {paths[activeInfo?.path]?.name || activeInfo?.path} · {activeInfo?.element}
                   </p>
                   <p className="subtitle">
                     Eidolon {activeCharacter.rank || 0} · {activeCharacter.relicList?.length || 0}/6 relics equipped
@@ -395,22 +448,22 @@ export default function ProfilePage() {
                 {activeStats && (
                   <div className="detail-stats">
                     <h3>Total Stats</h3>
-                    <div className="stat-grid">
-                      <div className="stat-chip"><span className="stat-label">HP</span><span className="stat-value">{activeStats.hp}</span></div>
-                      <div className="stat-chip"><span className="stat-label">ATK</span><span className="stat-value">{activeStats.atk}</span></div>
-                      <div className="stat-chip"><span className="stat-label">DEF</span><span className="stat-value">{activeStats.def}</span></div>
-                      <div className="stat-chip"><span className="stat-label">SPD</span><span className="stat-value">{activeStats.spd}</span></div>
-                      <div className="stat-chip"><span className="stat-label">CRIT Rate</span><span className="stat-value">{activeStats.critRate}%</span></div>
-                      <div className="stat-chip"><span className="stat-label">CRIT DMG</span><span className="stat-value">{activeStats.critDmg}%</span></div>
+                    <ul className="stat-list">
+                      <li><span className="stat-label">HP</span><span className="stat-value">{activeStats.hp}</span></li>
+                      <li><span className="stat-label">ATK</span><span className="stat-value">{activeStats.atk}</span></li>
+                      <li><span className="stat-label">DEF</span><span className="stat-value">{activeStats.def}</span></li>
+                      <li><span className="stat-label">SPD</span><span className="stat-value">{activeStats.spd}</span></li>
+                      <li><span className="stat-label">CRIT Rate</span><span className="stat-value">{activeStats.critRate}%</span></li>
+                      <li><span className="stat-label">CRIT DMG</span><span className="stat-value">{activeStats.critDmg}%</span></li>
                       {Object.entries(activeStats.genericStats).map(([type, value]) => (
-                        <div className="stat-chip" key={type}>
+                        <li key={type}>
                           <span className="stat-label">{STAT_LABELS[type] || type}</span>
                           <span className="stat-value">
-                            {type.includes('Delta') ? `+${Math.round(value * 10) / 10}` : `+${(value * 100).toFixed(1)}%`}
+                            {FLAT_STAT_TYPES.has(type) ? `+${Math.round(value * 10) / 10}` : `+${(value * 100).toFixed(1)}%`}
                           </span>
-                        </div>
+                        </li>
                       ))}
-                    </div>
+                    </ul>
                   </div>
                 )}
 

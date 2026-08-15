@@ -434,32 +434,29 @@ h1 {
   color: var(--accent);
 }
 
-.stat-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
-  gap: 8px;
-  margin-top: 14px;
-}
-
-.stat-chip {
-  background: var(--bg);
-  border: 1px solid var(--panel-border);
-  border-radius: 8px;
-  padding: 8px 10px;
+.stat-list {
+  list-style: disc;
+  margin: 14px 0 0;
+  padding-left: 18px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 
-.stat-label {
-  font-size: 10.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+.stat-list li {
+  font-size: 13px;
   color: var(--text-dim);
 }
 
+.stat-label {
+  color: var(--text-dim);
+}
+
+.stat-label::after {
+  content: ': ';
+}
+
 .stat-value {
-  font-size: 14px;
   font-weight: 600;
   color: var(--accent-gold);
 }
@@ -493,11 +490,12 @@ h1 {
     flex: 0 0 auto;
     width: 100%;
   }
+  .detail-stats {
+    flex: 0 0 auto;
+    width: 100%;
+  }
   .relic-list {
     grid-template-columns: repeat(auto-fill, minmax(52px, 1fr));
-  }
-  .stat-grid {
-    grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
   }
 }
 
