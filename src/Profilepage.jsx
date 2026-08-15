@@ -415,7 +415,11 @@ export default function ProfilePage() {
                     </div>
                   )}
 
-                  {activeStats && (
+                </div>
+
+                {activeStats && (
+                  <div className="detail-stats">
+                    <h3>Total Stats</h3>
                     <div className="stat-grid">
                       <div className="stat-chip"><span className="stat-label">HP</span><span className="stat-value">{activeStats.hp}</span></div>
                       <div className="stat-chip"><span className="stat-label">ATK</span><span className="stat-value">{activeStats.atk}</span></div>
@@ -432,8 +436,8 @@ export default function ProfilePage() {
                         </div>
                       ))}
                     </div>
-                  )}
-                </div>
+                  </div>
+                )}
 
                 {activeCharacter.relicList && activeCharacter.relicList.length > 0 && (
                   <div className="detail-relics">
