@@ -349,72 +349,100 @@ export default function ProfilePage() {
 
           {activeCharacter && (
             <div className="detail-panel">
-              <h2>
-                {activeInfo?.name === '{NICKNAME}' ? player.nickname : activeInfo?.name || 'Unknown'}
-              </h2>
-              <p className="subtitle">
-                Level {activeCharacter.level} · {activeInfo?.path} · {activeInfo?.element}
-              </p>
-              <p className="subtitle">
-                Eidolon {activeCharacter.rank || 0} · {activeCharacter.relicList?.length || 0}/6 relics equipped
-              </p>
-              {activeCharacter.equipment && (
-                <p className="subtitle">
-                  {lightConeNames[activeCharacter.equipment.tid]?.name || 'Unknown Light Cone'} · Superimposition {activeCharacter.equipment.rank}
-                </p>
-              )}
-              {activeStats && (
-                <ul className="set-summary">
-                  <li>HP: {activeStats.hp}</li>
-                  <li>ATK: {activeStats.atk}</li>
-                  <li>DEF: {activeStats.def}</li>
-                  <li>SPD: {activeStats.spd}</li>
-                  <li>CRIT Rate: {activeStats.critRate}%</li>
-                  <li>CRIT DMG: {activeStats.critDmg}%</li>
-                  {Object.entries(activeStats.genericStats).map(([type, value]) => (
-                    <li key={type}>{formatStat(type, value)}</li>
-                  ))}
-                </ul>
-              )}
+              <div className="detail-header">
+                {activeInfo?.portrait && (
+                  <img
+                    className="character-portrait"
+                    src={`https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/${activeInfo.portrait}`}
+                    alt={activeInfo?.name === '{NICKNAME}' ? player.nickname : activeInfo?.name}
+                  />
+                )}
+                <div className="detail-header-info">
+                  <h2>
+                    {activeInfo?.name === '{NICKNAME}' ? player.nickname : activeInfo?.name || 'Unknown'}
+                  </h2>
+                  <p className="subtitle">
+                    Level {activeCharacter.level} · {activeInfo?.path} · {activeInfo?.element}
+                  </p>
+                  <p className="subtitle">
+                    Eidolon {activeCharacter.rank || 0} · {activeCharacter.relicList?.length || 0}/6 relics equipped
+                  </p>
+                  {activeCharacter.equipment && (
+                    <p className="subtitle">
+                      {lightConeNames[activeCharacter.equipment.tid]?.name || 'Unknown Light Cone'} · Superimposition {activeCharacter.equipment.rank}
+                    </p>
+                  )}
+
+                  {activeStats && (
+                    <div className="stat-grid">
+                      <div className="stat-chip"><span className="stat-label">HP</span><span className="stat-value">{activeStats.hp}</span></div>
+                      <div className="stat-chip"><span className="stat-label">ATK</span><span className="stat-value">{activeStats.atk}</span></div>
+                      <div className="stat-chip"><span className="stat-label">DEF</span><span className="stat-value">{activeStats.def}</span></div>
+                      <div className="stat-chip"><span className="stat-label">SPD</span><span className="stat-value">{activeStats.spd}</span></div>
+                      <div className="stat-chip"><span className="stat-label">CRIT Rate</span><span className="stat-value">{activeStats.critRate}%</span></div>
+                      <div className="stat-chip"><span className="stat-label">CRIT DMG</span><span className="stat-value">{activeStats.critDmg}%</span></div>
+                      {Object.entries(activeStats.genericStats).map(([type, value]) => (
+                        <div className="stat-chip" key={type}>
+                          <span className="stat-label">{STAT_LABELS[type] || type}</span>
+                          <span className="stat-value">
+                            {type.includes('Delta') ? `+${Math.round(value * 10) / 10}` : `+${(value * 100).toFixed(1)}%`}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
               {activeSetSummary.length > 0 && (
-                <ul className="set-summary">
-                  {activeSetSummary.map((set, index) => (
-                    <li key={index}>
-                      {set.piece} {set.name} — {set.desc}
-                    </li>
-                  ))}
-                </ul>
+                <div className="detail-section">
+                  <h3>Relic Sets</h3>
+                  <ul className="set-summary">
+                    {activeSetSummary.map((set, index) => (
+                      <li key={index}>
+                        {set.piece} {set.name} — {set.desc}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               )}
 
               {activeCharacter.relicList && activeCharacter.relicList.length > 0 && (
-                <ul className="set-summary">
-                  {activeCharacter.relicList.map((relic) => {
-                    const [mainStat, ...subStats] = relic._flat.props;
-                    return (
-                      <li key={relic.type}>
-                        <strong>{RELIC_TYPE_LABELS[relic.type]}:</strong> {formatStat(mainStat.type, mainStat.value)}
-                        {subStats.length > 0 && (
-                          <span className="substats">
-                            {' '}— {subStats.map((s) => formatStat(s.type, s.value)).join(', ')}
-                          </span>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
+                <div className="detail-section">
+                  <h3>Equipped Relics</h3>
+                  <ul className="set-summary">
+                    {activeCharacter.relicList.map((relic) => {
+                      const [mainStat, ...subStats] = relic._flat.props;
+                      return (
+                        <li key={relic.type}>
+                          <strong>{RELIC_TYPE_LABELS[relic.type]}:</strong> {formatStat(mainStat.type, mainStat.value)}
+                          {subStats.length > 0 && (
+                            <span className="substats">
+                              {' '}— {subStats.map((s) => formatStat(s.type, s.value)).join(', ')}
+                            </span>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
               )}
+
               {activeCharacter.skillTreeList && activeCharacter.skillTreeList.length > 0 && (
-                <ul className="set-summary">
-                  {activeCharacter.skillTreeList.map((point) => {
-                    const treeInfo = skillTrees[point.pointId];
-                    const label = treeInfo?.name || ANCHOR_LABELS[treeInfo?.anchor] || `Point ${point.pointId}`;
-                    return (
-                      <li key={point.pointId}>
-                        {label} (Lv.{point.level}{treeInfo?.max_level ? `/${treeInfo.max_level}` : ''})
-                      </li>
-                    );
-                  })}
-                </ul>
+                <div className="detail-section">
+                  <h3>Trace Nodes</h3>
+                  <ul className="set-summary">
+                    {activeCharacter.skillTreeList.map((point) => {
+                      const treeInfo = skillTrees[point.pointId];
+                      const label = treeInfo?.name || ANCHOR_LABELS[treeInfo?.anchor] || `Point ${point.pointId}`;
+                      return (
+                        <li key={point.pointId}>
+                          {label} (Lv.{point.level}{treeInfo?.max_level ? `/${treeInfo.max_level}` : ''})
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
               )}
             </div>
           )}
