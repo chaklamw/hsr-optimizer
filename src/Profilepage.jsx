@@ -215,7 +215,7 @@ function computeFinalStats(character, promotions, relicSets, skillTrees, lightCo
     hp: Math.round((baseHP + lcBaseHP) * (1 + pctHP) + flatHP),
     atk: Math.round((baseATK + lcBaseATK) * (1 + pctATK) + flatATK),
     def: Math.round((baseDEF + lcBaseDEF) * (1 + pctDEF) + flatDEF),
-    spd: Math.round((baseSPD * (1 + pctSPD) + flatSPD) * 10) / 10,
+    spd: Math.round(baseSPD * (1 + pctSPD) + flatSPD),
     critRate: (critRate * 100).toFixed(1),
     critDmg: (critDmg * 100).toFixed(1),
     genericStats,
