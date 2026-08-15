@@ -96,7 +96,7 @@ const CANONICAL_STAT_TYPE = {
 function formatStat(property, value) {
   const label = STAT_LABELS[property] || property;
   if (FLAT_STAT_TYPES.has(property)) {
-    return `${label} +${Math.round(value * 10) / 10}`;
+    return `${label} +${Math.round(value)}`;
   }
   return `${label} +${(value * 100).toFixed(1)}%`;
 }
@@ -459,7 +459,7 @@ export default function ProfilePage() {
                         <li key={type}>
                           <span className="stat-label">{STAT_LABELS[type] || type}</span>
                           <span className="stat-value">
-                            {FLAT_STAT_TYPES.has(type) ? `+${Math.round(value * 10) / 10}` : `+${(value * 100).toFixed(1)}%`}
+                            {FLAT_STAT_TYPES.has(type) ? `+${Math.round(value)}` : `+${(value * 100).toFixed(1)}%`}
                           </span>
                         </li>
                       ))}
@@ -486,11 +486,20 @@ export default function ProfilePage() {
                               alt={RELIC_TYPE_LABELS[relic.type]}
                             />
                             <div className="relic-tooltip">
-                              <strong>{RELIC_TYPE_LABELS[relic.type]}:</strong> {formatStat(mainStat.type, mainStat.value)}
+                              <strong>{RELIC_TYPE_LABELS[relic.type]}</strong>
+                              <p className="relic-mainstat">{formatStat(mainStat.type, mainStat.value)}</p>
                               {subStats.length > 0 && (
-                                <span className="substats">
-                                  {' '}— {subStats.map((s) => formatStat(s.type, s.value)).join(', ')}
-                                </span>
+                                <ul className="relic-substats">
+                                  {subStats.map((s, i) => {
+                                    const rolls = (relic.subAffixList?.[i]?.cnt ?? 1) - 1;
+                                    return (
+                                      <li key={s.type}>
+                                        {formatStat(s.type, s.value)}
+                                        {rolls > 0 && ` (${rolls})`}
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
                               )}
                               {set && (
                                 <div className="relic-set-info">
