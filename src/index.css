@@ -241,7 +241,7 @@ h1 {
 }
 
 .profile-content {
-  max-width: 900px;
+  max-width: 1200px;
   margin: 0 auto;
 }
 
@@ -325,14 +325,15 @@ h1 {
 
 .detail-header {
   display: flex;
-  gap: 20px;
+  gap: 28px;
   align-items: flex-start;
 }
 
 .character-portrait {
   width: 60%;
+  max-width: 380px;
   height: auto;
-  flex: 0 0 60%;
+  flex-shrink: 0;
   aspect-ratio: 1 / 1;
   object-fit: contain;
   object-position: center;
@@ -347,6 +348,76 @@ h1 {
 .detail-header-info h2 {
   margin: 0 0 4px;
   font-size: 18px;
+}
+
+.lightcone-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 28px;
+}
+
+.lightcone-text {
+  margin: 0;
+}
+
+.lightcone-badge {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.lightcone-icon {
+  width: 190px;
+  height: auto;
+  aspect-ratio: 902 / 1260;
+  display: block;
+  object-fit: cover;
+  background: var(--bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 0;
+  transition: border-color 0.15s ease;
+}
+
+.lightcone-badge:hover .lightcone-icon {
+  border-color: var(--accent-soft);
+}
+
+.lightcone-tooltip {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: min(300px, calc(100vw - 64px));
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  box-shadow: 0 12px 28px -12px rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 20;
+}
+
+.lightcone-badge:hover .lightcone-tooltip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.lightcone-tooltip strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--accent-gold);
+  font-size: 13px;
+}
+
+.lightcone-tooltip p {
+  margin: 0;
 }
 
 .stat-grid {
@@ -404,6 +475,13 @@ h1 {
     flex: 0 0 auto;
     width: 60%;
   }
+  .detail-relics {
+    flex: 0 0 auto;
+    width: 100%;
+  }
+  .relic-list {
+    grid-template-columns: repeat(auto-fill, minmax(52px, 1fr));
+  }
   .stat-grid {
     grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
   }
@@ -414,6 +492,78 @@ h1 {
   padding-left: 18px;
   font-size: 13px;
   color: var(--text-dim);
+}
+
+.detail-relics {
+  flex: 0 0 200px;
+}
+
+.detail-relics h3 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.relic-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+}
+
+.relic-item {
+  position: relative;
+  cursor: default;
+}
+
+.relic-icon {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  display: block;
+  object-fit: contain;
+  background: var(--bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 6px;
+  transition: border-color 0.15s ease;
+}
+
+.relic-item:hover .relic-icon {
+  border-color: var(--accent-soft);
+}
+
+.relic-tooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  width: 220px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  box-shadow: 0 12px 28px -12px rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 20;
+}
+
+.relic-item:hover .relic-tooltip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.relic-tooltip strong {
+  color: var(--text);
 }
 
 .character-icon {

@@ -62,6 +62,26 @@ const RELIC_TYPE_LABELS = {
   6: 'Link Rope',
 };
 
+function getRelicIconUrl(relic) {
+  const setID = relic._flat.setID;
+  // Cavern relic pieces (Head/Hands/Body/Feet) are indexed 0-3.
+  // Planar ornament pieces (Sphere/Rope) reset back to 0-1.
+  const suffix = relic.type <= 4 ? relic.type - 1 : relic.type - 5;
+  return `https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/icon/relic/${setID}_${suffix}.png`;
+}
+
+function formatLightConeDesc(desc, params) {
+  if (!desc || !params) return desc;
+  return desc.replace(/#(\d+)\[(i|f1|f2)\](%?)/g, (match, idx, fmt, pct) => {
+    const raw = params[Number(idx) - 1];
+    if (raw === undefined) return match;
+    const value = pct === '%' ? raw * 100 : raw;
+    if (fmt === 'i') return Math.round(value) + pct;
+    if (fmt === 'f1') return value.toFixed(1) + pct;
+    return value.toFixed(2) + pct;
+  });
+}
+
 const TOTAL_REQUESTS = 7;
 
 function computeFinalStats(character, promotions, relicSets, skillTrees, lightConeRanks) {
@@ -368,9 +388,31 @@ export default function ProfilePage() {
                     Eidolon {activeCharacter.rank || 0} · {activeCharacter.relicList?.length || 0}/6 relics equipped
                   </p>
                   {activeCharacter.equipment && (
-                    <p className="subtitle">
-                      {lightConeNames[activeCharacter.equipment.tid]?.name || 'Unknown Light Cone'} · Superimposition {activeCharacter.equipment.rank}
-                    </p>
+                    <div className="lightcone-info">
+                      {lightConeNames[activeCharacter.equipment.tid]?.portrait && (
+                        <div className="lightcone-badge">
+                          <img
+                            className="lightcone-icon"
+                            src={`https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/${lightConeNames[activeCharacter.equipment.tid].portrait}`}
+                            alt={lightConeNames[activeCharacter.equipment.tid]?.name}
+                          />
+                          <div className="lightcone-tooltip">
+                            <strong>
+                              {lightConeRanks[activeCharacter.equipment.tid]?.skill || lightConeNames[activeCharacter.equipment.tid]?.name}
+                            </strong>
+                            <p>
+                              {formatLightConeDesc(
+                                lightConeRanks[activeCharacter.equipment.tid]?.desc,
+                                lightConeRanks[activeCharacter.equipment.tid]?.params?.[activeCharacter.equipment.rank - 1]
+                              )}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                      <p className="subtitle lightcone-text">
+                        {lightConeNames[activeCharacter.equipment.tid]?.name || 'Unknown Light Cone'} · Superimposition {activeCharacter.equipment.rank}
+                      </p>
+                    </div>
                   )}
 
                   {activeStats && (
@@ -392,6 +434,34 @@ export default function ProfilePage() {
                     </div>
                   )}
                 </div>
+
+                {activeCharacter.relicList && activeCharacter.relicList.length > 0 && (
+                  <div className="detail-relics">
+                    <h3>Relics</h3>
+                    <ul className="relic-list">
+                      {activeCharacter.relicList.map((relic) => {
+                        const [mainStat, ...subStats] = relic._flat.props;
+                        return (
+                          <li className="relic-item" key={relic.type}>
+                            <img
+                              className="relic-icon"
+                              src={getRelicIconUrl(relic)}
+                              alt={RELIC_TYPE_LABELS[relic.type]}
+                            />
+                            <div className="relic-tooltip">
+                              <strong>{RELIC_TYPE_LABELS[relic.type]}:</strong> {formatStat(mainStat.type, mainStat.value)}
+                              {subStats.length > 0 && (
+                                <span className="substats">
+                                  {' '}— {subStats.map((s) => formatStat(s.type, s.value)).join(', ')}
+                                </span>
+                              )}
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                )}
               </div>
 
               {activeSetSummary.length > 0 && (
@@ -403,27 +473,6 @@ export default function ProfilePage() {
                         {set.piece} {set.name} — {set.desc}
                       </li>
                     ))}
-                  </ul>
-                </div>
-              )}
-
-              {activeCharacter.relicList && activeCharacter.relicList.length > 0 && (
-                <div className="detail-section">
-                  <h3>Equipped Relics</h3>
-                  <ul className="set-summary">
-                    {activeCharacter.relicList.map((relic) => {
-                      const [mainStat, ...subStats] = relic._flat.props;
-                      return (
-                        <li key={relic.type}>
-                          <strong>{RELIC_TYPE_LABELS[relic.type]}:</strong> {formatStat(mainStat.type, mainStat.value)}
-                          {subStats.length > 0 && (
-                            <span className="substats">
-                              {' '}— {subStats.map((s) => formatStat(s.type, s.value)).join(', ')}
-                            </span>
-                          )}
-                        </li>
-                      );
-                    })}
                   </ul>
                 </div>
               )}
