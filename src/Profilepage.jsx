@@ -8,6 +8,7 @@ const SKILL_TREES_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/m
 const CHARACTER_PROMOTIONS_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/character_promotions.json';
 const LIGHT_CONE_RANKS_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/light_cone_ranks.json';
 const PATHS_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/paths.json';
+const RELIC_MAIN_AFFIXES_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/relic_main_affixes.json';
 
 const ANCHOR_LABELS = {
   Point01: 'Basic ATK',
@@ -93,6 +94,64 @@ const CANONICAL_STAT_TYPE = {
   ImaginaryResistanceDelta: 'ImaginaryResistance',
 };
 
+// The 12 possible relic substat types — fixed since the relic system's
+// inception, unlike Paths/Elements which are actual game content that
+// gets added to over time, so this is safe to keep as a fixed list
+// rather than fetching it.
+const SUBSTAT_TYPES = [
+  'HPDelta',
+  'AttackDelta',
+  'DefenceDelta',
+  'SpeedDelta',
+  'HPAddedRatio',
+  'AttackAddedRatio',
+  'DefenceAddedRatio',
+  'CriticalChanceBase',
+  'CriticalDamageBase',
+  'StatusProbabilityBase',
+  'StatusResistanceBase',
+  'BreakDamageAddedRatioBase',
+];
+
+// Starting points for the relic comparison tool's weighting, expressed as
+// "value per 1 percentage point" for percent stats and "value per 1 point"
+// for flat stats. CRIT Rate/CRIT DMG follow the community-standard 2:1
+// Crit Value ratio. Everything else is a rough, adjustable starting
+// guess — there's no universal "correct" weight for stats like SPD or
+// ATK% since their real value depends on the specific character/build.
+const DEFAULT_WEIGHTS = {
+  HPDelta: 0.05,
+  AttackDelta: 0.05,
+  DefenceDelta: 0.05,
+  SpeedDelta: 2.5,
+  HPAddedRatio: 0.5,
+  AttackAddedRatio: 0.5,
+  DefenceAddedRatio: 0.5,
+  CriticalChanceBase: 2,
+  CriticalDamageBase: 1,
+  StatusProbabilityBase: 0.4,
+  StatusResistanceBase: 0.4,
+  BreakDamageAddedRatioBase: 0.3,
+};
+
+const WEIGHTS_STORAGE_KEY = 'hsr-showcase-relic-weights';
+
+function scoreStatLine(type, value, weights) {
+  const weight = weights[type] ?? 0;
+  if (FLAT_STAT_TYPES.has(type)) return value * weight;
+  return value * 100 * weight;
+}
+
+function getMainStatOptions(relicMainAffixes, type) {
+  const props = new Set();
+  Object.entries(relicMainAffixes).forEach(([id, group]) => {
+    if (id.length !== 2) return; // skip a handful of anomalous non-standard entries in the data
+    if (Number(id[1]) !== type) return;
+    Object.values(group.affixes).forEach((a) => props.add(a.property));
+  });
+  return Array.from(props);
+}
+
 function formatStat(property, value) {
   const label = STAT_LABELS[property] || property;
   if (FLAT_STAT_TYPES.has(property)) {
@@ -130,7 +189,7 @@ function formatLightConeDesc(desc, params) {
   });
 }
 
-const TOTAL_REQUESTS = 8;
+const TOTAL_REQUESTS = 9;
 
 function computeFinalStats(character, promotions, relicSets, skillTrees, lightConeRanks) {
   const promoData = promotions[character.avatarId]?.values?.[character.promotion];
@@ -232,12 +291,42 @@ export default function ProfilePage() {
   const [characterPromotions, setCharacterPromotions] = useState({});
   const [lightConeRanks, setLightConeRanks] = useState({});
   const [paths, setPaths] = useState({});
+  const [relicMainAffixes, setRelicMainAffixes] = useState({});
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadedCount, setLoadedCount] = useState(0);
   const [selectedId, setSelectedId] = useState(null);
+  const [compareSlot, setCompareSlot] = useState(null);
+  const [compareMainStat, setCompareMainStat] = useState({ type: '', value: '' });
+  const [compareSubstats, setCompareSubstats] = useState([
+    { type: '', value: '' },
+    { type: '', value: '' },
+    { type: '', value: '' },
+    { type: '', value: '' },
+  ]);
+  const [weights, setWeights] = useState(DEFAULT_WEIGHTS);
+  const [showWeights, setShowWeights] = useState(false);
   const cardRefs = useRef({});
   const trackRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(WEIGHTS_STORAGE_KEY);
+      if (saved) setWeights({ ...DEFAULT_WEIGHTS, ...JSON.parse(saved) });
+    } catch {
+      // ignore corrupt/missing localStorage data, defaults already in state
+    }
+  }, []);
+
+  function updateWeight(type, value) {
+    const next = { ...weights, [type]: value };
+    setWeights(next);
+    try {
+      localStorage.setItem(WEIGHTS_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // ignore storage errors (e.g. private browsing quota)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -263,8 +352,9 @@ export default function ProfilePage() {
       trackedFetch(CHARACTER_PROMOTIONS_URL),
       trackedFetch(LIGHT_CONE_RANKS_URL),
       trackedFetch(PATHS_URL),
+      trackedFetch(RELIC_MAIN_AFFIXES_URL),
     ])
-      .then(([playerJson, namesJson, lightConesJson, relicSetsJson, skillTreesJson, promotionsJson, lightConeRanksJson, pathsJson]) => {
+      .then(([playerJson, namesJson, lightConesJson, relicSetsJson, skillTreesJson, promotionsJson, lightConeRanksJson, pathsJson, mainAffixesJson]) => {
         if (cancelled) return;
         if (playerJson.error) {
           setError(playerJson.error);
@@ -277,6 +367,7 @@ export default function ProfilePage() {
           setCharacterPromotions(promotionsJson);
           setLightConeRanks(lightConeRanksJson);
           setPaths(pathsJson);
+          setRelicMainAffixes(mainAffixesJson);
         }
         setLoading(false);
       })
@@ -480,11 +571,30 @@ export default function ProfilePage() {
                         ).length;
                         return (
                           <li className="relic-item" key={relic.type}>
-                            <img
-                              className="relic-icon"
-                              src={getRelicIconUrl(relic)}
-                              alt={RELIC_TYPE_LABELS[relic.type]}
-                            />
+                            <button
+                              type="button"
+                              className="relic-icon-btn"
+                              onClick={() => {
+                                const options = getMainStatOptions(relicMainAffixes, relic.type);
+                                setCompareSlot(relic.type);
+                                setCompareMainStat({
+                                  type: options.length === 1 ? options[0] : '',
+                                  value: '',
+                                });
+                                setCompareSubstats([
+                                  { type: '', value: '' },
+                                  { type: '', value: '' },
+                                  { type: '', value: '' },
+                                  { type: '', value: '' },
+                                ]);
+                              }}
+                            >
+                              <img
+                                className="relic-icon"
+                                src={getRelicIconUrl(relic)}
+                                alt={RELIC_TYPE_LABELS[relic.type]}
+                              />
+                            </button>
                             <div className="relic-tooltip">
                               <strong>{RELIC_TYPE_LABELS[relic.type]}</strong>
                               <p className="relic-mainstat">{formatStat(mainStat.type, mainStat.value)}</p>
@@ -508,6 +618,7 @@ export default function ProfilePage() {
                                   {setCount >= 4 && set.desc[1] && <p>4pc: {set.desc[1]}</p>}
                                 </div>
                               )}
+                              <p className="relic-tooltip-hint">Click icon to compare</p>
                             </div>
                           </li>
                         );
@@ -533,6 +644,163 @@ export default function ProfilePage() {
                   </ul>
                 </div>
               )}
+
+              {compareSlot != null && (() => {
+                const equippedRelic = activeCharacter.relicList.find((r) => r.type === compareSlot);
+                const [eqMain, ...eqSubs] = equippedRelic._flat.props;
+                const mainOptions = getMainStatOptions(relicMainAffixes, compareSlot);
+                const usedTypes = new Set(
+                  [compareMainStat.type, ...compareSubstats.map((s) => s.type)].filter(Boolean)
+                );
+
+                const equippedScore =
+                  scoreStatLine(eqMain.type, eqMain.value, weights) +
+                  eqSubs.reduce((sum, s) => sum + scoreStatLine(s.type, s.value, weights), 0);
+
+                const newScore =
+                  (compareMainStat.type && compareMainStat.value !== ''
+                    ? scoreStatLine(compareMainStat.type, Number(compareMainStat.value), weights)
+                    : 0) +
+                  compareSubstats.reduce((sum, s) => {
+                    if (!s.type || s.value === '') return sum;
+                    return sum + scoreStatLine(s.type, Number(s.value), weights);
+                  }, 0);
+
+                function updateSubstat(index, field, value) {
+                  setCompareSubstats((prev) =>
+                    prev.map((s, i) => (i === index ? { ...s, [field]: value } : s))
+                  );
+                }
+
+                return (
+                  <div className="compare-overlay" onClick={() => setCompareSlot(null)}>
+                    <div className="compare-modal" onClick={(e) => e.stopPropagation()}>
+                      <div className="compare-modal-header">
+                        <h3>Compare {RELIC_TYPE_LABELS[compareSlot]}</h3>
+                        <button
+                          type="button"
+                          className="compare-close-btn"
+                          onClick={() => setCompareSlot(null)}
+                        >
+                          ×
+                        </button>
+                      </div>
+
+                      <div className="compare-columns">
+                        <div className="compare-column">
+                          <h4>Equipped</h4>
+                          <p className="relic-mainstat">{formatStat(eqMain.type, eqMain.value)}</p>
+                          <ul className="relic-substats">
+                            {eqSubs.map((s) => (
+                              <li key={s.type}>{formatStat(s.type, s.value)}</li>
+                            ))}
+                          </ul>
+                          <p className="compare-score">
+                            Score: <strong>{equippedScore.toFixed(1)}</strong>
+                          </p>
+                        </div>
+
+                        <div className="compare-column">
+                          <h4>New Relic</h4>
+                          <div className="compare-form-row">
+                            {mainOptions.length === 1 ? (
+                              <span className="compare-fixed-mainstat">
+                                {STAT_LABELS[mainOptions[0]] || mainOptions[0]}
+                              </span>
+                            ) : (
+                              <select
+                                value={compareMainStat.type}
+                                onChange={(e) =>
+                                  setCompareMainStat({ ...compareMainStat, type: e.target.value })
+                                }
+                              >
+                                <option value="">Main stat...</option>
+                                {mainOptions.map((type) => (
+                                  <option key={type} value={type}>
+                                    {STAT_LABELS[type] || type}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                            <input
+                              type="number"
+                              placeholder="Value"
+                              value={compareMainStat.value}
+                              onChange={(e) =>
+                                setCompareMainStat({ ...compareMainStat, value: e.target.value })
+                              }
+                            />
+                          </div>
+
+                          {compareSubstats.map((s, i) => (
+                            <div className="compare-form-row" key={i}>
+                              <select
+                                value={s.type}
+                                onChange={(e) => updateSubstat(i, 'type', e.target.value)}
+                              >
+                                <option value="">Substat...</option>
+                                {SUBSTAT_TYPES.map((type) => (
+                                  <option
+                                    key={type}
+                                    value={type}
+                                    disabled={usedTypes.has(type) && type !== s.type}
+                                  >
+                                    {STAT_LABELS[type] || type}
+                                  </option>
+                                ))}
+                              </select>
+                              <input
+                                type="number"
+                                placeholder="Value"
+                                value={s.value}
+                                onChange={(e) => updateSubstat(i, 'value', e.target.value)}
+                              />
+                            </div>
+                          ))}
+
+                          <p className="compare-score">
+                            Score: <strong>{newScore.toFixed(1)}</strong>
+                          </p>
+                        </div>
+                      </div>
+
+                      <p
+                        className={`compare-verdict ${
+                          newScore > equippedScore ? 'compare-verdict-win' : 'compare-verdict-lose'
+                        }`}
+                      >
+                        {newScore > equippedScore
+                          ? `New relic is better by ${(newScore - equippedScore).toFixed(1)}`
+                          : `Equipped relic is better by ${(equippedScore - newScore).toFixed(1)}`}
+                      </p>
+
+                      <button
+                        type="button"
+                        className="compare-weights-toggle"
+                        onClick={() => setShowWeights((v) => !v)}
+                      >
+                        {showWeights ? 'Hide' : 'Adjust'} stat weights
+                      </button>
+
+                      {showWeights && (
+                        <div className="compare-weights">
+                          {SUBSTAT_TYPES.map((type) => (
+                            <div className="compare-weight-row" key={type}>
+                              <span>{STAT_LABELS[type] || type}</span>
+                              <input
+                                type="number"
+                                step="0.1"
+                                value={weights[type] ?? 0}
+                                onChange={(e) => updateWeight(type, Number(e.target.value))}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
         </>
