@@ -113,6 +113,51 @@ const SUBSTAT_TYPES = [
   'BreakDamageAddedRatioBase',
 ];
 
+// For OCR parsing: each substat's in-game label is ambiguous between its
+// flat and percent variant (both just say "HP", "ATK", "DEF") — the only
+// way to tell them apart from raw text is whether a "%" follows the
+// number. Ordered longest-label-first so e.g. "CRIT DMG" is tried before
+// a shorter label that might accidentally match part of it.
+const SUBSTAT_OCR_PATTERNS = [
+  { label: 'Effect Hit Rate', type: 'StatusProbabilityBase' },
+  { label: 'Effect RES', type: 'StatusResistanceBase' },
+  { label: 'Break Effect', type: 'BreakDamageAddedRatioBase' },
+  { label: 'CRIT Rate', type: 'CriticalChanceBase' },
+  { label: 'CRIT DMG', type: 'CriticalDamageBase' },
+  { label: 'SPD', type: 'SpeedDelta' },
+  { label: 'HP', percentType: 'HPAddedRatio', flatType: 'HPDelta' },
+  { label: 'ATK', percentType: 'AttackAddedRatio', flatType: 'AttackDelta' },
+  { label: 'DEF', percentType: 'DefenceAddedRatio', flatType: 'DefenceDelta' },
+];
+
+function parseSubstatsFromText(rawText) {
+  const text = rawText.replace(/\s+/g, ' ');
+  const found = [];
+  const usedTypes = new Set();
+
+  SUBSTAT_OCR_PATTERNS.forEach(({ label, type, percentType, flatType }) => {
+    const pattern = new RegExp(`${label}[^0-9+\\-]{0,6}([+\\-]?\\d+\\.?\\d*)(\\s*%)?`, 'i');
+    const match = text.match(pattern);
+    if (!match) return;
+
+    const value = parseFloat(match[1]);
+    if (Number.isNaN(value)) return;
+
+    const hasPercent = Boolean(match[2]);
+    const resolvedType = type || (hasPercent ? percentType : flatType);
+    if (usedTypes.has(resolvedType)) return;
+    usedTypes.add(resolvedType);
+
+    // Stored in human-readable display units (e.g. 4.3 for "4.3%", 42 for
+    // flat HP) — matches how the comparison form's manual entry works and
+    // is scored via scoreFormStatLine, not the fraction units relic._flat
+    // uses internally.
+    found.push({ type: resolvedType, value: String(value) });
+  });
+
+  return found.slice(0, 4);
+}
+
 // Starting points for the relic comparison tool's weighting, expressed as
 // "value per 1 percentage point" for percent stats and "value per 1 point"
 // for flat stats. CRIT Rate/CRIT DMG follow the community-standard 2:1
@@ -140,6 +185,14 @@ function scoreStatLine(type, value, weights) {
   const weight = weights[type] ?? 0;
   if (FLAT_STAT_TYPES.has(type)) return value * weight;
   return value * 100 * weight;
+}
+
+// Used for the relic comparison form (manual typing or OCR output), where
+// values are entered/extracted in human-readable display units (e.g. 10.7
+// for "10.7%", 42 for flat HP) — unlike relic._flat.props, which stores
+// percent stats as fractions (0.107). No *100 conversion needed here.
+function scoreFormStatLine(type, value, weights) {
+  return value * (weights[type] ?? 0);
 }
 
 function getMainStatOptions(relicMainAffixes, type) {
@@ -306,6 +359,8 @@ export default function ProfilePage() {
   ]);
   const [weights, setWeights] = useState(DEFAULT_WEIGHTS);
   const [showWeights, setShowWeights] = useState(false);
+  const [ocrStatus, setOcrStatus] = useState('idle');
+  const [ocrPreviewUrl, setOcrPreviewUrl] = useState(null);
   const cardRefs = useRef({});
   const trackRef = useRef(null);
 
@@ -325,6 +380,29 @@ export default function ProfilePage() {
       localStorage.setItem(WEIGHTS_STORAGE_KEY, JSON.stringify(next));
     } catch {
       // ignore storage errors (e.g. private browsing quota)
+    }
+  }
+
+  async function handleRelicImageUpload(file) {
+    if (!file) return;
+    setOcrPreviewUrl(URL.createObjectURL(file));
+    setOcrStatus('scanning');
+    try {
+      // Loaded on demand so the OCR library (WASM, a few MB) doesn't
+      // bloat the initial page load for people who never use this.
+      const { createWorker } = await import('tesseract.js');
+      const worker = await createWorker('eng');
+      const { data: { text } } = await worker.recognize(file);
+      await worker.terminate();
+
+      const parsed = parseSubstatsFromText(text);
+      const padded = [...parsed];
+      while (padded.length < 4) padded.push({ type: '', value: '' });
+      setCompareSubstats(padded);
+      setOcrStatus(parsed.length > 0 ? 'done' : 'no-match');
+    } catch (err) {
+      console.error('OCR failed:', err);
+      setOcrStatus('error');
     }
   }
 
@@ -587,6 +665,8 @@ export default function ProfilePage() {
                                   { type: '', value: '' },
                                   { type: '', value: '' },
                                 ]);
+                                setOcrStatus('idle');
+                                setOcrPreviewUrl(null);
                               }}
                             >
                               <img
@@ -659,11 +739,11 @@ export default function ProfilePage() {
 
                 const newScore =
                   (compareMainStat.type && compareMainStat.value !== ''
-                    ? scoreStatLine(compareMainStat.type, Number(compareMainStat.value), weights)
+                    ? scoreFormStatLine(compareMainStat.type, Number(compareMainStat.value), weights)
                     : 0) +
                   compareSubstats.reduce((sum, s) => {
                     if (!s.type || s.value === '') return sum;
-                    return sum + scoreStatLine(s.type, Number(s.value), weights);
+                    return sum + scoreFormStatLine(s.type, Number(s.value), weights);
                   }, 0);
 
                 function updateSubstat(index, field, value) {
@@ -702,6 +782,37 @@ export default function ProfilePage() {
 
                         <div className="compare-column">
                           <h4>New Relic</h4>
+
+                          <label className="compare-upload-btn">
+                            {ocrStatus === 'scanning' ? 'Reading image...' : 'Upload relic screenshot'}
+                            <input
+                              type="file"
+                              accept="image/*"
+                              hidden
+                              onChange={(e) => handleRelicImageUpload(e.target.files?.[0])}
+                            />
+                          </label>
+
+                          {ocrPreviewUrl && (
+                            <img className="compare-ocr-preview" src={ocrPreviewUrl} alt="Uploaded relic" />
+                          )}
+
+                          {ocrStatus === 'done' && (
+                            <p className="compare-ocr-note">
+                              Auto-filled from image — double check the values below.
+                            </p>
+                          )}
+                          {ocrStatus === 'no-match' && (
+                            <p className="compare-ocr-note compare-ocr-note-warn">
+                              Couldn't read any substats from that image — fill them in manually below.
+                            </p>
+                          )}
+                          {ocrStatus === 'error' && (
+                            <p className="compare-ocr-note compare-ocr-note-warn">
+                              Something went wrong reading that image — fill in manually below.
+                            </p>
+                          )}
+
                           <div className="compare-form-row">
                             {mainOptions.length === 1 ? (
                               <span className="compare-fixed-mainstat">
@@ -724,7 +835,7 @@ export default function ProfilePage() {
                             )}
                             <input
                               type="number"
-                              placeholder="Value"
+                              placeholder="e.g. 10.7"
                               value={compareMainStat.value}
                               onChange={(e) =>
                                 setCompareMainStat({ ...compareMainStat, value: e.target.value })
@@ -751,7 +862,7 @@ export default function ProfilePage() {
                               </select>
                               <input
                                 type="number"
-                                placeholder="Value"
+                                placeholder="e.g. 10.7"
                                 value={s.value}
                                 onChange={(e) => updateSubstat(i, 'value', e.target.value)}
                               />
