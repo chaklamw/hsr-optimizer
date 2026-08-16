@@ -775,20 +775,34 @@ h1 {
   display: block;
   text-align: center;
   margin-bottom: 10px;
-  padding: 8px;
+  padding: 12px 8px;
   font-size: 12px;
   font-weight: 600;
+  line-height: 1.4;
   background: var(--bg);
   border: 1px dashed var(--panel-border);
   border-radius: 6px;
   color: var(--text-dim);
   cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.compare-upload-btn-dragging {
+  border-color: var(--accent);
+  color: var(--text);
+  background: rgba(185, 140, 242, 0.1);
 }
 
 .compare-upload-btn:hover {
   border-color: var(--accent-soft);
   color: var(--text);
+}
+
+.compare-upload-hint {
+  margin: -4px 0 10px;
+  font-size: 11px;
+  color: var(--text-dim);
+  opacity: 0.8;
 }
 
 .compare-ocr-preview {

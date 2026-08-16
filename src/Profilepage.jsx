@@ -130,32 +130,91 @@ const SUBSTAT_OCR_PATTERNS = [
   { label: 'DEF', percentType: 'DefenceAddedRatio', flatType: 'DefenceDelta' },
 ];
 
+// Generous upper bounds a single relic substat could ever plausibly reach
+// (well above any realistic max-roll total), used only to catch OCR
+// clearly picking up an unrelated number from elsewhere in a busy
+// screenshot — not meant to be a precise in-game formula.
+const SUBSTAT_SANITY_MAX = {
+  HPDelta: 300,
+  AttackDelta: 150,
+  DefenceDelta: 150,
+  SpeedDelta: 25,
+  HPAddedRatio: 100,
+  AttackAddedRatio: 100,
+  DefenceAddedRatio: 100,
+  CriticalChanceBase: 100,
+  CriticalDamageBase: 100,
+  StatusProbabilityBase: 100,
+  StatusResistanceBase: 100,
+  BreakDamageAddedRatioBase: 100,
+};
+
 function parseSubstatsFromText(rawText) {
   const text = rawText.replace(/\s+/g, ' ');
   const found = [];
   const usedTypes = new Set();
 
   SUBSTAT_OCR_PATTERNS.forEach(({ label, type, percentType, flatType }) => {
-    const pattern = new RegExp(`${label}[^0-9+\\-]{0,6}([+\\-]?\\d+\\.?\\d*)(\\s*%)?`, 'i');
+    // OCR sometimes drops spaces between words ("CRIT DMG" -> "CRITDMG"),
+    // so match on flexible whitespace rather than a literal space.
+    const flexibleLabel = label.replace(/\s+/g, '\\s*');
+    const pattern = new RegExp(`${flexibleLabel}[^0-9+\\-]{0,6}([+\\-]?\\d+\\.?\\d*)(\\s*%)?`, 'gi');
+    const matches = [...text.matchAll(pattern)];
+    if (matches.length === 0) return;
+
+    // A label like "ATK" can appear twice — once for the main stat, once
+    // for the substat. The main stat mention comes first in reading
+    // order, so scan from the last match backward for the first one that
+    // survives sanity checks (most likely the real substat).
+    for (let i = matches.length - 1; i >= 0; i--) {
+      const match = matches[i];
+      const value = parseFloat(match[1]);
+      if (Number.isNaN(value) || value <= 0) continue;
+
+      const hasPercent = Boolean(match[2]);
+      const resolvedType = type || (hasPercent ? percentType : flatType);
+      if (value > (SUBSTAT_SANITY_MAX[resolvedType] ?? Infinity)) continue;
+      if (usedTypes.has(resolvedType)) continue;
+
+      usedTypes.add(resolvedType);
+      // Stored in human-readable display units (e.g. 4.3 for "4.3%", 42 for
+      // flat HP) — matches how the comparison form's manual entry works and
+      // is scored via scoreFormStatLine, not the fraction units relic._flat
+      // uses internally.
+      found.push({ type: resolvedType, value: String(value) });
+      break;
+    }
+  });
+
+  return found.slice(0, 4);
+}
+
+function parseMainStatFromText(rawText, mainOptions) {
+  const text = rawText.replace(/\s+/g, ' ');
+  let best = null;
+
+  mainOptions.forEach((statType) => {
+    // STAT_LABELS has entries like 'HP%' with the % baked into the label
+    // text, but OCR renders the % separately after the number (not
+    // glued to the label) — strip it so the search term matches reality.
+    const cleanLabel = (STAT_LABELS[statType] || statType).replace(/%$/, '').trim();
+    const flexibleLabel = cleanLabel.replace(/\s+/g, '\\s*');
+    const pattern = new RegExp(`${flexibleLabel}[^0-9+\\-]{0,6}([+\\-]?\\d+\\.?\\d*)(\\s*%)?`, 'i');
     const match = text.match(pattern);
     if (!match) return;
 
     const value = parseFloat(match[1]);
-    if (Number.isNaN(value)) return;
+    if (Number.isNaN(value) || value <= 0) return;
 
-    const hasPercent = Boolean(match[2]);
-    const resolvedType = type || (hasPercent ? percentType : flatType);
-    if (usedTypes.has(resolvedType)) return;
-    usedTypes.add(resolvedType);
-
-    // Stored in human-readable display units (e.g. 4.3 for "4.3%", 42 for
-    // flat HP) — matches how the comparison form's manual entry works and
-    // is scored via scoreFormStatLine, not the fraction units relic._flat
-    // uses internally.
-    found.push({ type: resolvedType, value: String(value) });
+    // The main stat is always the first stat line in the panel, so among
+    // all candidate labels that matched something, prefer whichever one
+    // starts earliest in the text.
+    if (best === null || match.index < best.index) {
+      best = { type: statType, value: String(value), index: match.index };
+    }
   });
 
-  return found.slice(0, 4);
+  return best ? { type: best.type, value: best.value } : null;
 }
 
 // Starting points for the relic comparison tool's weighting, expressed as
@@ -361,6 +420,7 @@ export default function ProfilePage() {
   const [showWeights, setShowWeights] = useState(false);
   const [ocrStatus, setOcrStatus] = useState('idle');
   const [ocrPreviewUrl, setOcrPreviewUrl] = useState(null);
+  const [isDraggingImage, setIsDraggingImage] = useState(false);
   const cardRefs = useRef({});
   const trackRef = useRef(null);
 
@@ -383,6 +443,20 @@ export default function ProfilePage() {
     }
   }
 
+  useEffect(() => {
+    if (compareSlot == null) return;
+
+    function handlePaste(e) {
+      const item = Array.from(e.clipboardData?.items || []).find((i) => i.type.startsWith('image/'));
+      if (!item) return;
+      e.preventDefault();
+      handleRelicImageUpload(item.getAsFile());
+    }
+
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [compareSlot]);
+
   async function handleRelicImageUpload(file) {
     if (!file) return;
     setOcrPreviewUrl(URL.createObjectURL(file));
@@ -395,11 +469,17 @@ export default function ProfilePage() {
       const { data: { text } } = await worker.recognize(file);
       await worker.terminate();
 
+      const mainOptions = getMainStatOptions(relicMainAffixes, compareSlot);
+      const mainMatch = parseMainStatFromText(text, mainOptions);
+      if (mainMatch) {
+        setCompareMainStat({ type: mainMatch.type, value: mainMatch.value });
+      }
+
       const parsed = parseSubstatsFromText(text);
       const padded = [...parsed];
       while (padded.length < 4) padded.push({ type: '', value: '' });
       setCompareSubstats(padded);
-      setOcrStatus(parsed.length > 0 ? 'done' : 'no-match');
+      setOcrStatus(parsed.length > 0 || mainMatch ? 'done' : 'no-match');
     } catch (err) {
       console.error('OCR failed:', err);
       setOcrStatus('error');
@@ -783,8 +863,22 @@ export default function ProfilePage() {
                         <div className="compare-column">
                           <h4>New Relic</h4>
 
-                          <label className="compare-upload-btn">
-                            {ocrStatus === 'scanning' ? 'Reading image...' : 'Upload relic screenshot'}
+                          <label
+                            className={`compare-upload-btn${isDraggingImage ? ' compare-upload-btn-dragging' : ''}`}
+                            onDragOver={(e) => {
+                              e.preventDefault();
+                              setIsDraggingImage(true);
+                            }}
+                            onDragLeave={() => setIsDraggingImage(false)}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              setIsDraggingImage(false);
+                              handleRelicImageUpload(e.dataTransfer.files?.[0]);
+                            }}
+                          >
+                            {ocrStatus === 'scanning'
+                              ? 'Reading image...'
+                              : 'Upload, drag & drop, or paste (Ctrl+V) a screenshot'}
                             <input
                               type="file"
                               accept="image/*"
@@ -792,6 +886,10 @@ export default function ProfilePage() {
                               onChange={(e) => handleRelicImageUpload(e.target.files?.[0])}
                             />
                           </label>
+
+                          <p className="compare-upload-hint">
+                            Best results with a cropped screenshot of just the stat panel — not the full inventory grid.
+                          </p>
 
                           {ocrPreviewUrl && (
                             <img className="compare-ocr-preview" src={ocrPreviewUrl} alt="Uploaded relic" />
