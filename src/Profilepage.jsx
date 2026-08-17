@@ -9,6 +9,7 @@ const CHARACTER_PROMOTIONS_URL = 'https://raw.githubusercontent.com/Mar-7th/Star
 const LIGHT_CONE_RANKS_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/light_cone_ranks.json';
 const PATHS_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/paths.json';
 const RELIC_MAIN_AFFIXES_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/relic_main_affixes.json';
+const CHARACTER_SKILLS_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/character_skills.json';
 
 const ANCHOR_LABELS = {
   Point01: 'Basic ATK',
@@ -301,7 +302,56 @@ function formatLightConeDesc(desc, params) {
   });
 }
 
-const TOTAL_REQUESTS = 9;
+const ELEMENT_DMG_TYPE = {
+  Physical: 'PhysicalAddedRatio',
+  Fire: 'FireAddedRatio',
+  Ice: 'IceAddedRatio',
+  Lightning: 'ThunderAddedRatio',
+  Wind: 'WindAddedRatio',
+  Quantum: 'QuantumAddedRatio',
+  Imaginary: 'ImaginaryAddedRatio',
+};
+
+async function interpretSkillScaling(description) {
+  const res = await fetch('http://localhost:3001/api/interpret-skill', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ description }),
+  });
+  if (!res.ok) throw new Error(`Server responded ${res.status}`);
+  const data = await res.json();
+  return data.scalingStat;
+}
+
+// Standard HSR damage estimate: scaling stat x skill multiplier, modified by
+// DEF mitigation, enemy RES, elemental DMG bonus, and expected CRIT value.
+// Enemy assumptions (level, RES%, DEF shred%) are estimates you provide,
+// not simulated combat — there's no real enemy to reference.
+function computeDamage({
+  scalingStatValue,
+  skillMultiplierPercent,
+  characterLevel,
+  enemyLevel,
+  enemyResPercent,
+  defShredPercent,
+  elementalDmgPercent,
+  critRatePercent,
+  critDmgPercent,
+}) {
+  const baseDmg = scalingStatValue * (skillMultiplierPercent / 100);
+
+  const levelMultiplier = characterLevel * 10 + 200;
+  const enemyDefense = (enemyLevel * 10 + 200) * (1 - defShredPercent / 100);
+  const defMultiplier = levelMultiplier / (levelMultiplier + enemyDefense);
+
+  const resMultiplier = 1 - enemyResPercent / 100;
+  const dmgBonusMultiplier = 1 + elementalDmgPercent / 100;
+  const critMultiplier = 1 + (critRatePercent / 100) * (critDmgPercent / 100);
+
+  return baseDmg * defMultiplier * resMultiplier * dmgBonusMultiplier * critMultiplier;
+}
+
+const TOTAL_REQUESTS = 10;
 
 function computeFinalStats(character, promotions, relicSets, skillTrees, lightConeRanks) {
   const promoData = promotions[character.avatarId]?.values?.[character.promotion];
@@ -404,6 +454,7 @@ export default function ProfilePage() {
   const [lightConeRanks, setLightConeRanks] = useState({});
   const [paths, setPaths] = useState({});
   const [relicMainAffixes, setRelicMainAffixes] = useState({});
+  const [characterSkills, setCharacterSkills] = useState({});
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadedCount, setLoadedCount] = useState(0);
@@ -421,6 +472,14 @@ export default function ProfilePage() {
   const [ocrStatus, setOcrStatus] = useState('idle');
   const [ocrPreviewUrl, setOcrPreviewUrl] = useState(null);
   const [isDraggingImage, setIsDraggingImage] = useState(false);
+  const [showDamageCalc, setShowDamageCalc] = useState(false);
+  const [calcSkillId, setCalcSkillId] = useState('');
+  const [calcSkillLevel, setCalcSkillLevel] = useState(1);
+  const [calcEnemyLevel, setCalcEnemyLevel] = useState(95);
+  const [calcEnemyRes, setCalcEnemyRes] = useState(0);
+  const [calcDefShred, setCalcDefShred] = useState(0);
+  const [calcScalingStat, setCalcScalingStat] = useState('');
+  const [calcScalingStatus, setCalcScalingStatus] = useState('idle');
   const cardRefs = useRef({});
   const trackRef = useRef(null);
 
@@ -486,6 +545,28 @@ export default function ProfilePage() {
     }
   }
 
+  async function handleCalcSkillChange(skillId, level) {
+    setCalcSkillId(skillId);
+    setCalcSkillLevel(level);
+    setCalcScalingStat('');
+
+    const skill = characterSkills[skillId];
+    if (!skill) return;
+
+    const resolvedDesc = formatLightConeDesc(skill.desc, skill.params[level - 1]);
+    if (!resolvedDesc) return;
+
+    setCalcScalingStatus('loading');
+    try {
+      const stat = await interpretSkillScaling(resolvedDesc);
+      setCalcScalingStat(stat === 'NONE' ? '' : stat);
+      setCalcScalingStatus('done');
+    } catch (err) {
+      console.error('Skill scaling detection failed:', err);
+      setCalcScalingStatus('error');
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -511,8 +592,9 @@ export default function ProfilePage() {
       trackedFetch(LIGHT_CONE_RANKS_URL),
       trackedFetch(PATHS_URL),
       trackedFetch(RELIC_MAIN_AFFIXES_URL),
+      trackedFetch(CHARACTER_SKILLS_URL),
     ])
-      .then(([playerJson, namesJson, lightConesJson, relicSetsJson, skillTreesJson, promotionsJson, lightConeRanksJson, pathsJson, mainAffixesJson]) => {
+      .then(([playerJson, namesJson, lightConesJson, relicSetsJson, skillTreesJson, promotionsJson, lightConeRanksJson, pathsJson, mainAffixesJson, characterSkillsJson]) => {
         if (cancelled) return;
         if (playerJson.error) {
           setError(playerJson.error);
@@ -526,6 +608,7 @@ export default function ProfilePage() {
           setLightConeRanks(lightConeRanksJson);
           setPaths(pathsJson);
           setRelicMainAffixes(mainAffixesJson);
+          setCharacterSkills(characterSkillsJson);
         }
         setLoading(false);
       })
@@ -713,6 +796,18 @@ export default function ProfilePage() {
                         </li>
                       ))}
                     </ul>
+                    <button
+                      type="button"
+                      className="damage-calc-btn"
+                      onClick={() => {
+                        setShowDamageCalc(true);
+                        setCalcSkillId('');
+                        setCalcScalingStat('');
+                        setCalcScalingStatus('idle');
+                      }}
+                    >
+                      Damage Calculator
+                    </button>
                   </div>
                 )}
 
@@ -1005,6 +1100,149 @@ export default function ProfilePage() {
                             </div>
                           ))}
                         </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {showDamageCalc && (() => {
+                const skillIds = characterNames[activeCharacter.avatarId]?.skills || [];
+                const skill = characterSkills[calcSkillId];
+                const scalingKey = calcScalingStat ? calcScalingStat.toLowerCase() : '';
+                const scalingValue = scalingKey && activeStats ? activeStats[scalingKey] : null;
+
+                const elementDmgType = ELEMENT_DMG_TYPE[activeInfo?.element];
+                const elementalDmgPercent =
+                  elementDmgType && activeStats?.genericStats[elementDmgType]
+                    ? activeStats.genericStats[elementDmgType] * 100
+                    : 0;
+                const allDmgPercent = activeStats?.genericStats.AllDamageTypeAddedRatio
+                  ? activeStats.genericStats.AllDamageTypeAddedRatio * 100
+                  : 0;
+
+                const damage =
+                  skill && scalingValue != null
+                    ? computeDamage({
+                        scalingStatValue: scalingValue,
+                        skillMultiplierPercent: (skill.params[calcSkillLevel - 1]?.[0] || 0) * 100,
+                        characterLevel: activeCharacter.level,
+                        enemyLevel: calcEnemyLevel,
+                        enemyResPercent: calcEnemyRes,
+                        defShredPercent: calcDefShred,
+                        elementalDmgPercent: elementalDmgPercent + allDmgPercent,
+                        critRatePercent: parseFloat(activeStats.critRate),
+                        critDmgPercent: parseFloat(activeStats.critDmg),
+                      })
+                    : null;
+
+                return (
+                  <div className="compare-overlay" onClick={() => setShowDamageCalc(false)}>
+                    <div className="compare-modal" onClick={(e) => e.stopPropagation()}>
+                      <div className="compare-modal-header">
+                        <h3>Damage Calculator</h3>
+                        <button
+                          type="button"
+                          className="compare-close-btn"
+                          onClick={() => setShowDamageCalc(false)}
+                        >
+                          ×
+                        </button>
+                      </div>
+
+                      <div className="compare-form-row">
+                        <select
+                          value={calcSkillId}
+                          onChange={(e) => {
+                            const id = e.target.value;
+                            const newSkill = characterSkills[id];
+                            handleCalcSkillChange(id, newSkill?.max_level || 1);
+                          }}
+                        >
+                          <option value="">Select a skill...</option>
+                          {skillIds.map((id) => {
+                            const s = characterSkills[id];
+                            if (!s) return null;
+                            return (
+                              <option key={id} value={id}>
+                                {s.type_text ? `${s.type_text}: ` : ''}
+                                {s.name}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+
+                      {skill && (
+                        <>
+                          <div className="compare-form-row">
+                            <label className="calc-inline-label">
+                              Skill Level
+                              <input
+                                type="number"
+                                min="1"
+                                max={skill.max_level}
+                                value={calcSkillLevel}
+                                onChange={(e) => handleCalcSkillChange(calcSkillId, Number(e.target.value))}
+                              />
+                            </label>
+                          </div>
+
+                          <p className="compare-ocr-note">
+                            {formatLightConeDesc(skill.desc, skill.params[calcSkillLevel - 1])}
+                          </p>
+
+                          <div className="compare-form-row">
+                            <span className="calc-inline-label">Scaling stat</span>
+                            <select value={calcScalingStat} onChange={(e) => setCalcScalingStat(e.target.value)}>
+                              <option value="">None detected</option>
+                              <option value="ATK">ATK</option>
+                              <option value="DEF">DEF</option>
+                              <option value="HP">HP</option>
+                            </select>
+                          </div>
+                          {calcScalingStatus === 'loading' && (
+                            <p className="compare-ocr-note">Detecting scaling stat...</p>
+                          )}
+                          {calcScalingStatus === 'error' && (
+                            <p className="compare-ocr-note compare-ocr-note-warn">
+                              Couldn't reach the detection service — pick the scaling stat manually.
+                            </p>
+                          )}
+                        </>
+                      )}
+
+                      <div className="compare-weights">
+                        <div className="compare-weight-row">
+                          <span>Enemy Level</span>
+                          <input
+                            type="number"
+                            value={calcEnemyLevel}
+                            onChange={(e) => setCalcEnemyLevel(Number(e.target.value))}
+                          />
+                        </div>
+                        <div className="compare-weight-row">
+                          <span>Enemy RES %</span>
+                          <input
+                            type="number"
+                            value={calcEnemyRes}
+                            onChange={(e) => setCalcEnemyRes(Number(e.target.value))}
+                          />
+                        </div>
+                        <div className="compare-weight-row">
+                          <span>DEF Shred %</span>
+                          <input
+                            type="number"
+                            value={calcDefShred}
+                            onChange={(e) => setCalcDefShred(Number(e.target.value))}
+                          />
+                        </div>
+                      </div>
+
+                      {damage != null && (
+                        <p className="damage-calc-result">
+                          Estimated DMG: <strong>{Math.round(damage).toLocaleString()}</strong>
+                        </p>
                       )}
                     </div>
                   </div>

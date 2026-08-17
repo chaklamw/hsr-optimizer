@@ -912,3 +912,58 @@ h1 {
     grid-template-columns: 1fr;
   }
 }
+
+.damage-calc-btn {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  padding: 8px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--accent-soft);
+  color: var(--text);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.damage-calc-btn:hover {
+  background: var(--accent);
+  color: #1a1424;
+}
+
+.calc-inline-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.calc-inline-label input {
+  width: 60px;
+  font: inherit;
+  font-size: 12px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 5px 6px;
+}
+
+.damage-calc-result {
+  margin: 16px 0 0;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(242, 209, 109, 0.1);
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.damage-calc-result strong {
+  color: var(--accent-gold);
+  font-size: 16px;
+}
