@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 
@@ -5,6 +6,7 @@ const app = express();
 const PORT = 3001;
 
 app.use(cors());
+app.use(express.json());
 
 app.get('/', (req, res) => {
   res.send('Backend is running');
@@ -30,6 +32,75 @@ app.get('/api/hsr/:uid', async (req, res) => {
 
   const data = await enkaResponse.json();
   res.json(data);
+});
+
+app.post('/api/interpret-skill', async (req, res) => {
+  const { description } = req.body;
+
+  if (!description || typeof description !== 'string') {
+    res.status(400).json({ error: 'Missing "description" string in request body' });
+    return;
+  }
+
+  if (!process.env.GROQ_API_KEY) {
+    res.status(500).json({ error: 'Server is missing GROQ_API_KEY' });
+    return;
+  }
+
+  const prompt = `You are extracting structured data from a Honkai: Star Rail skill description.
+
+Skill description: "${description}"
+
+Which single stat does this skill's damage or effect primarily scale from: ATK, DEF, or HP? If it scales from more than one, pick the one that contributes the most to its primary effect. If the skill doesn't scale from any of these three, respond with NONE.
+
+Respond with ONLY a JSON object in this exact shape, no other text, no markdown formatting:
+{"scalingStat": "ATK" | "DEF" | "HP" | "NONE"}`;
+
+  try {
+    const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0,
+      }),
+    });
+
+    if (!groqResponse.ok) {
+      console.log('Groq responded with status:', groqResponse.status);
+      res.status(groqResponse.status).json({ error: 'Failed to fetch from Groq' });
+      return;
+    }
+
+    const groqData = await groqResponse.json();
+    const rawContent = groqData.choices?.[0]?.message?.content || '';
+
+    const cleaned = rawContent.replace(/```json|```/g, '').trim();
+
+    let parsed;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch {
+      console.log('Could not parse Groq response as JSON:', rawContent);
+      res.status(502).json({ error: 'Model returned unparseable response' });
+      return;
+    }
+
+    const validStats = ['ATK', 'DEF', 'HP', 'NONE'];
+    if (!validStats.includes(parsed.scalingStat)) {
+      res.status(502).json({ error: 'Model returned an unexpected value', raw: parsed });
+      return;
+    }
+
+    res.json({ scalingStat: parsed.scalingStat });
+  } catch (err) {
+    console.log('Error calling Groq:', err);
+    res.status(500).json({ error: 'Failed to interpret skill' });
+  }
 });
 
 app.listen(PORT, () => {
