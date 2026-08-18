@@ -1,6 +1,11 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import express from 'express';
 import cors from 'cors';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.join(__dirname, '.env') });
 
 const app = express();
 const PORT = 3001;
@@ -64,14 +69,15 @@ Respond with ONLY a JSON object in this exact shape, no other text, no markdown 
         Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'openai/gpt-oss-20b',
         messages: [{ role: 'user', content: prompt }],
         temperature: 0,
       }),
     });
 
     if (!groqResponse.ok) {
-      console.log('Groq responded with status:', groqResponse.status);
+      const errBody = await groqResponse.text();
+      console.log('Groq responded with status:', groqResponse.status, errBody);
       res.status(groqResponse.status).json({ error: 'Failed to fetch from Groq' });
       return;
     }
@@ -79,6 +85,8 @@ Respond with ONLY a JSON object in this exact shape, no other text, no markdown 
     const groqData = await groqResponse.json();
     const rawContent = groqData.choices?.[0]?.message?.content || '';
 
+    // Strip markdown code fences in case the model wraps its JSON in them
+    // despite being asked not to.
     const cleaned = rawContent.replace(/```json|```/g, '').trim();
 
     let parsed;

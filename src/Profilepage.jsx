@@ -318,8 +318,8 @@ async function interpretSkillScaling(description) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ description }),
   });
-  if (!res.ok) throw new Error(`Server responded ${res.status}`);
-  const data = await res.json();
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Server responded ${res.status}`);
   return data.scalingStat;
 }
 
