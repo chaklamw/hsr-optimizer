@@ -351,14 +351,44 @@ function conditionalAppliesToSkill(conditional, skillTypeText) {
 }
 
 // StarRailRes lists some non-damage entries alongside real attacks — e.g.
-// Archer's "Skill: End", a state-exit toggle with no scaling values. A
-// skill with no numeric params (or all-zero params) isn't dealing damage,
-// so it's filtered out of the calculator's skill picker.
+// Archer's "Skill: End", a state-exit toggle with no scaling values, but
+// also heal/shield/buff skills that DO carry nonzero params (heal amount,
+// shield value, buff %) despite not dealing damage. A skill with no
+// numeric params is filtered out outright; one with params is only kept
+// if its resolved description actually mentions dealing DMG, since HSR
+// skill text consistently uses that wording for real attacks.
 function skillDealsDamage(skill) {
   if (!skill || !Array.isArray(skill.params) || skill.params.length === 0) return false;
   const firstLevelParams = skill.params[0];
   if (!Array.isArray(firstLevelParams) || firstLevelParams.length === 0) return false;
-  return firstLevelParams.some((v) => v > 0);
+  if (!firstLevelParams.some((v) => v > 0)) return false;
+
+  const resolvedDesc = formatLightConeDesc(skill.desc, firstLevelParams) || skill.desc || '';
+  return /dmg/i.test(resolvedDesc);
+}
+
+// Talents and Techniques often mention "DMG" while describing a
+// conditional buff to something else (e.g. a memosprite's damage on
+// healing) rather than being a direct attack themselves — exactly the
+// kind of thing the AI conditional detector should read, but not
+// something the player can select and calculate a hit for. The
+// calculator's own skill picker is restricted to actual player-cast
+// attacks.
+const DIRECT_ATTACK_TYPES = new Set(['Basic ATK', 'Skill', 'Ultimate', 'Memosprite Skill']);
+
+// A handful of skills (e.g. Little Ica's) don't scale off ATK/DEF/HP at
+// all — their base damage comes from some other tracked value, like a
+// running tally of healing done in the battle. Detected generically from
+// the resolved description text rather than hardcoded to one character,
+// so it keeps working if a future character shares the mechanic.
+function getNonStatScalingLabel(resolvedDesc) {
+  if (!resolvedDesc) return null;
+  if (/tally of healing/i.test(resolvedDesc)) return 'Healing tally this battle';
+  return null;
+}
+
+function isSelectableAttack(skill) {
+  return skillDealsDamage(skill) && DIRECT_ATTACK_TYPES.has(skill.type_text);
 }
 
 const TOTAL_REQUESTS = 10;
@@ -490,6 +520,7 @@ export default function ProfilePage() {
   const [calcDefShred, setCalcDefShred] = useState(0);
   const [calcScalingStat, setCalcScalingStat] = useState('');
   const [calcScalingStatus, setCalcScalingStatus] = useState('idle');
+  const [calcNonStatValue, setCalcNonStatValue] = useState(0);
   const [aiConditionals, setAiConditionals] = useState([]);
   const [aiConditionalStatus, setAiConditionalStatus] = useState('idle');
   const [aiConditionalError, setAiConditionalError] = useState('');
@@ -596,6 +627,7 @@ export default function ProfilePage() {
     setCalcSkillId(skillId);
     setCalcSkillLevel(level);
     setCalcScalingStat('');
+    setCalcNonStatValue(0);
     setAiConditionalStacks({});
 
     const skill = characterSkills[skillId];
@@ -603,6 +635,11 @@ export default function ProfilePage() {
 
     const resolvedDesc = formatLightConeDesc(skill.desc, skill.params[level - 1]);
     if (!resolvedDesc) return;
+
+    if (getNonStatScalingLabel(resolvedDesc)) {
+      setCalcScalingStatus('idle');
+      return;
+    }
 
     setCalcScalingStatus('loading');
     try {
@@ -1157,8 +1194,15 @@ export default function ProfilePage() {
               {showDamageCalc && (() => {
                 const skillIds = characterNames[activeCharacter.avatarId]?.skills || [];
                 const skill = characterSkills[calcSkillId];
+                const resolvedSkillDesc = skill ? formatLightConeDesc(skill.desc, skill.params[calcSkillLevel - 1]) : '';
+                const nonStatScalingLabel = getNonStatScalingLabel(resolvedSkillDesc);
+
                 const scalingKey = calcScalingStat ? calcScalingStat.toLowerCase() : '';
-                const scalingValue = scalingKey && activeStats ? activeStats[scalingKey] : null;
+                const scalingValue = nonStatScalingLabel
+                  ? calcNonStatValue
+                  : scalingKey && activeStats
+                    ? activeStats[scalingKey]
+                    : null;
 
                 const elementDmgType = ELEMENT_DMG_TYPE[activeInfo?.element];
                 const elementalDmgPercent =
@@ -1243,7 +1287,7 @@ export default function ProfilePage() {
                           <option value="">Select a skill...</option>
                           {skillIds.map((id) => {
                             const s = characterSkills[id];
-                            if (!skillDealsDamage(s)) return null;
+                            if (!isSelectableAttack(s)) return null;
                             return (
                               <option key={id} value={id}>
                                 {s.type_text ? `${s.type_text}: ` : ''}
@@ -1269,26 +1313,40 @@ export default function ProfilePage() {
                             </label>
                           </div>
 
-                          <p className="compare-ocr-note">
-                            {formatLightConeDesc(skill.desc, skill.params[calcSkillLevel - 1])}
-                          </p>
+                          <p className="compare-ocr-note">{resolvedSkillDesc}</p>
 
-                          <div className="compare-form-row">
-                            <span className="calc-inline-label">Scaling stat</span>
-                            <select value={calcScalingStat} onChange={(e) => setCalcScalingStat(e.target.value)}>
-                              <option value="">None detected</option>
-                              <option value="ATK">ATK</option>
-                              <option value="DEF">DEF</option>
-                              <option value="HP">HP</option>
-                            </select>
-                          </div>
-                          {calcScalingStatus === 'loading' && (
-                            <p className="compare-ocr-note">Detecting scaling stat...</p>
-                          )}
-                          {calcScalingStatus === 'error' && (
-                            <p className="compare-ocr-note compare-ocr-note-warn">
-                              Couldn't reach the detection service — pick the scaling stat manually.
-                            </p>
+                          {nonStatScalingLabel ? (
+                            <div className="compare-form-row">
+                              <label className="calc-inline-label">
+                                {nonStatScalingLabel}
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={calcNonStatValue}
+                                  onChange={(e) => setCalcNonStatValue(Number(e.target.value) || 0)}
+                                />
+                              </label>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="compare-form-row">
+                                <span className="calc-inline-label">Scaling stat</span>
+                                <select value={calcScalingStat} onChange={(e) => setCalcScalingStat(e.target.value)}>
+                                  <option value="">None detected</option>
+                                  <option value="ATK">ATK</option>
+                                  <option value="DEF">DEF</option>
+                                  <option value="HP">HP</option>
+                                </select>
+                              </div>
+                              {calcScalingStatus === 'loading' && (
+                                <p className="compare-ocr-note">Detecting scaling stat...</p>
+                              )}
+                              {calcScalingStatus === 'error' && (
+                                <p className="compare-ocr-note compare-ocr-note-warn">
+                                  Couldn't reach the detection service — pick the scaling stat manually.
+                                </p>
+                              )}
+                            </>
                           )}
 
                           {matchedAiConditionals.map((c) => (
