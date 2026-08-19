@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
+import { computeDamage } from './damageCalculator';
 
 const CHARACTER_NAMES_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/characters.json';
 const LIGHT_CONE_NAMES_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/light_cones.json';
@@ -323,32 +324,41 @@ async function interpretSkillScaling(description) {
   return data.scalingStat;
 }
 
-// Standard HSR damage estimate: scaling stat x skill multiplier, modified by
-// DEF mitigation, enemy RES, elemental DMG bonus, and expected CRIT value.
-// Enemy assumptions (level, RES%, DEF shred%) are estimates you provide,
-// not simulated combat — there's no real enemy to reference.
-function computeDamage({
-  scalingStatValue,
-  skillMultiplierPercent,
-  characterLevel,
-  enemyLevel,
-  enemyResPercent,
-  defShredPercent,
-  elementalDmgPercent,
-  critRatePercent,
-  critDmgPercent,
-}) {
-  const baseDmg = scalingStatValue * (skillMultiplierPercent / 100);
+async function extractConditionals(characterName, abilities) {
+  const res = await fetch('http://localhost:3001/api/extract-conditionals', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ characterName, abilities }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Server responded ${res.status}`);
+  return data.conditionals;
+}
 
-  const levelMultiplier = characterLevel * 10 + 200;
-  const enemyDefense = (enemyLevel * 10 + 200) * (1 - defShredPercent / 100);
-  const defMultiplier = levelMultiplier / (levelMultiplier + enemyDefense);
+// Maps the ability type text StarRailRes uses to the same enum the
+// extraction endpoint returns, so an AI-extracted conditional can be
+// matched against whichever skill is currently selected in the calculator.
+const TYPE_TEXT_TO_ABILITY = {
+  'Basic ATK': 'BASIC',
+  Skill: 'SKILL',
+  Ultimate: 'ULT',
+  Talent: 'FUA',
+};
 
-  const resMultiplier = 1 - enemyResPercent / 100;
-  const dmgBonusMultiplier = 1 + elementalDmgPercent / 100;
-  const critMultiplier = 1 + (critRatePercent / 100) * (critDmgPercent / 100);
+function conditionalAppliesToSkill(conditional, skillTypeText) {
+  if (conditional.appliesToAbility === 'ALL') return true;
+  return conditional.appliesToAbility === TYPE_TEXT_TO_ABILITY[skillTypeText];
+}
 
-  return baseDmg * defMultiplier * resMultiplier * dmgBonusMultiplier * critMultiplier;
+// StarRailRes lists some non-damage entries alongside real attacks — e.g.
+// Archer's "Skill: End", a state-exit toggle with no scaling values. A
+// skill with no numeric params (or all-zero params) isn't dealing damage,
+// so it's filtered out of the calculator's skill picker.
+function skillDealsDamage(skill) {
+  if (!skill || !Array.isArray(skill.params) || skill.params.length === 0) return false;
+  const firstLevelParams = skill.params[0];
+  if (!Array.isArray(firstLevelParams) || firstLevelParams.length === 0) return false;
+  return firstLevelParams.some((v) => v > 0);
 }
 
 const TOTAL_REQUESTS = 10;
@@ -480,6 +490,10 @@ export default function ProfilePage() {
   const [calcDefShred, setCalcDefShred] = useState(0);
   const [calcScalingStat, setCalcScalingStat] = useState('');
   const [calcScalingStatus, setCalcScalingStatus] = useState('idle');
+  const [aiConditionals, setAiConditionals] = useState([]);
+  const [aiConditionalStatus, setAiConditionalStatus] = useState('idle');
+  const [aiConditionalError, setAiConditionalError] = useState('');
+  const [aiConditionalStacks, setAiConditionalStacks] = useState({});
   const cardRefs = useRef({});
   const trackRef = useRef(null);
 
@@ -545,10 +559,44 @@ export default function ProfilePage() {
     }
   }
 
+  async function handleDetectAiConditionals() {
+    const characterName = characterNames[activeCharacter.avatarId]?.name || 'Unknown';
+    const skillIds = characterNames[activeCharacter.avatarId]?.skills || [];
+
+    const abilities = skillIds
+      .map((id) => characterSkills[id])
+      .filter(skillDealsDamage)
+      .map((s) => ({
+        type: s.type_text || 'Ability',
+        description: formatLightConeDesc(s.desc, s.params[s.params.length - 1]) || s.desc,
+      }))
+      .filter((a) => a.description);
+
+    if (abilities.length === 0) {
+      setAiConditionalStatus('error');
+      setAiConditionalError('No resolved ability descriptions found for this character.');
+      return;
+    }
+
+    setAiConditionalStatus('loading');
+    setAiConditionalError('');
+    try {
+      const conditionals = await extractConditionals(characterName, abilities);
+      setAiConditionals(conditionals);
+      setAiConditionalStacks({});
+      setAiConditionalStatus(conditionals.length === 0 ? 'empty' : 'done');
+    } catch (err) {
+      console.error('AI conditional detection failed:', err);
+      setAiConditionalStatus('error');
+      setAiConditionalError(err.message || 'Failed to reach the extraction service.');
+    }
+  }
+
   async function handleCalcSkillChange(skillId, level) {
     setCalcSkillId(skillId);
     setCalcSkillLevel(level);
     setCalcScalingStat('');
+    setAiConditionalStacks({});
 
     const skill = characterSkills[skillId];
     if (!skill) return;
@@ -1121,6 +1169,15 @@ export default function ProfilePage() {
                   ? activeStats.genericStats.AllDamageTypeAddedRatio * 100
                   : 0;
 
+                const matchedAiConditionals = skill
+                  ? aiConditionals.filter((c) => conditionalAppliesToSkill(c, skill.type_text))
+                  : [];
+                const aiDmgPercent = matchedAiConditionals.reduce((sum, c) => {
+                  if (c.statType !== 'DMG_PERCENT') return sum;
+                  const stacks = aiConditionalStacks[c.name] || 0;
+                  return sum + (c.valuesByStack[stacks - 1] || 0);
+                }, 0);
+
                 const damage =
                   skill && scalingValue != null
                     ? computeDamage({
@@ -1130,7 +1187,7 @@ export default function ProfilePage() {
                         enemyLevel: calcEnemyLevel,
                         enemyResPercent: calcEnemyRes,
                         defShredPercent: calcDefShred,
-                        elementalDmgPercent: elementalDmgPercent + allDmgPercent,
+                        elementalDmgPercent: elementalDmgPercent + allDmgPercent + aiDmgPercent,
                         critRatePercent: parseFloat(activeStats.critRate),
                         critDmgPercent: parseFloat(activeStats.critDmg),
                       })
@@ -1151,6 +1208,30 @@ export default function ProfilePage() {
                       </div>
 
                       <div className="compare-form-row">
+                        <button
+                          type="button"
+                          className="compare-weights-toggle"
+                          onClick={handleDetectAiConditionals}
+                        >
+                          {aiConditionalStatus === 'loading' ? 'Detecting...' : 'Detect conditional bonuses (AI)'}
+                        </button>
+                      </div>
+
+                      {aiConditionalStatus === 'done' && (
+                        <p className="compare-ocr-note ai-disclaimer">
+                          ⚠️ These bonuses were extracted by AI from ability text and haven't been manually
+                          verified. Double-check against current in-game tooltips before trusting the numbers.
+                        </p>
+                      )}
+
+                      {aiConditionalStatus === 'error' && (
+                        <p className="compare-ocr-note compare-ocr-note-warn">{aiConditionalError}</p>
+                      )}
+                      {aiConditionalStatus === 'empty' && (
+                        <p className="compare-ocr-note">No conditional bonuses detected in this character's ability text.</p>
+                      )}
+
+                      <div className="compare-form-row">
                         <select
                           value={calcSkillId}
                           onChange={(e) => {
@@ -1162,7 +1243,7 @@ export default function ProfilePage() {
                           <option value="">Select a skill...</option>
                           {skillIds.map((id) => {
                             const s = characterSkills[id];
-                            if (!s) return null;
+                            if (!skillDealsDamage(s)) return null;
                             return (
                               <option key={id} value={id}>
                                 {s.type_text ? `${s.type_text}: ` : ''}
@@ -1209,6 +1290,32 @@ export default function ProfilePage() {
                               Couldn't reach the detection service — pick the scaling stat manually.
                             </p>
                           )}
+
+                          {matchedAiConditionals.map((c) => (
+                            <div key={c.name} className="compare-form-row ai-conditional-row">
+                              <div>
+                                <span className="calc-inline-label">{c.name}</span>
+                                <p className="compare-ocr-note ai-disclaimer">
+                                  ⚠️ AI-extracted — {c.trigger} — verify against current patch
+                                </p>
+                              </div>
+                              <select
+                                value={aiConditionalStacks[c.name] || 0}
+                                onChange={(e) =>
+                                  setAiConditionalStacks((prev) => ({
+                                    ...prev,
+                                    [c.name]: Number(e.target.value),
+                                  }))
+                                }
+                              >
+                                {Array.from({ length: c.maxStacks + 1 }, (_, n) => (
+                                  <option key={n} value={n}>
+                                    {n}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          ))}
                         </>
                       )}
 

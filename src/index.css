@@ -967,3 +967,29 @@ h1 {
   color: var(--accent-gold);
   font-size: 16px;
 }
+
+.ai-disclaimer {
+  color: var(--accent-gold);
+  opacity: 0.85;
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+.ai-conditional-row {
+  align-items: center;
+  gap: 12px;
+}
+
+.ai-conditional-row > div:first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.ai-conditional-row select {
+  flex: 0 0 auto;
+  width: 60px;
+}
+
+.ai-conditional-row .ai-disclaimer {
+  margin-top: 2px;
+}
