@@ -352,12 +352,13 @@ function conditionalAppliesToSkill(conditional, skillTypeText) {
 
 // StarRailRes lists some non-damage entries alongside real attacks — e.g.
 // Archer's "Skill: End", a state-exit toggle with no scaling values, but
-// also heal/shield/buff skills that DO carry nonzero params (heal amount,
-// shield value, buff %) despite not dealing damage. A skill with no
-// numeric params is filtered out outright; one with params is only kept
-// if its resolved description actually mentions dealing DMG, since HSR
-// skill text consistently uses that wording for real attacks.
-function skillDealsDamage(skill) {
+// also heal/shield/buff/summon skills that DO carry nonzero params (heal
+// amount, shield value, buff %) despite not dealing damage. This check is
+// deliberately loose — it also matches text that only mentions DMG in
+// passing (e.g. "increases DMG dealt by X%", "DMG Boost effect") — which
+// is exactly what's wanted when gathering ability text for the AI
+// conditional detector, since that's where such buffs get read from.
+function mentionsDamage(skill) {
   if (!skill || !Array.isArray(skill.params) || skill.params.length === 0) return false;
   const firstLevelParams = skill.params[0];
   if (!Array.isArray(firstLevelParams) || firstLevelParams.length === 0) return false;
@@ -365,6 +366,18 @@ function skillDealsDamage(skill) {
 
   const resolvedDesc = formatLightConeDesc(skill.desc, firstLevelParams) || skill.desc || '';
   return /dmg/i.test(resolvedDesc);
+}
+
+// Stricter than mentionsDamage: requires an active "deal(s) ... DMG"
+// phrase, which is how HSR consistently words abilities that actually
+// deal damage when used. This correctly excludes things like Castorice's
+// Ultimate ("Summons the memosprite... If Castorice has the DMG Boost
+// effect...") which mentions DMG without an attack happening, while
+// still matching real attacks ("Deals Quantum DMG equal to...").
+function dealsDirectDamage(skill) {
+  if (!mentionsDamage(skill)) return false;
+  const resolvedDesc = formatLightConeDesc(skill.desc, skill.params[0]) || skill.desc || '';
+  return /\bdeal(s)?\b[^.]{0,100}\bdmg\b/i.test(resolvedDesc);
 }
 
 // Talents and Techniques often mention "DMG" while describing a
@@ -388,7 +401,7 @@ function getNonStatScalingLabel(resolvedDesc) {
 }
 
 function isSelectableAttack(skill) {
-  return skillDealsDamage(skill) && DIRECT_ATTACK_TYPES.has(skill.type_text);
+  return dealsDirectDamage(skill) && DIRECT_ATTACK_TYPES.has(skill.type_text);
 }
 
 const TOTAL_REQUESTS = 10;
@@ -596,7 +609,7 @@ export default function ProfilePage() {
 
     const abilities = skillIds
       .map((id) => characterSkills[id])
-      .filter(skillDealsDamage)
+      .filter(mentionsDamage)
       .map((s) => ({
         type: s.type_text || 'Ability',
         description: formatLightConeDesc(s.desc, s.params[s.params.length - 1]) || s.desc,
