@@ -303,6 +303,104 @@ function formatLightConeDesc(desc, params) {
   });
 }
 
+// A skill's params array can mix genuinely different kinds of values —
+// a damage %, a flat heal amount, an instance count, a heal % — not just
+// "different hit percentages." The #N[fmt]% placeholder syntax in desc
+// tells us which indices are percentages at all (no trailing % means a
+// raw number, like an instance count or flat heal bonus). Among the
+// percentage ones, only those immediately preceded by "DMG" wording are
+// treated as real damage hits — this excludes heal/shield percentages
+// that happen to also be formatted as %.
+function getDamagePercentParamIndices(desc) {
+  if (!desc) return [];
+  const regex = /#(\d+)\[(i|f1|f2)\](%?)/g;
+  const indices = [];
+  let match;
+  while ((match = regex.exec(desc)) !== null) {
+    const idx = Number(match[1]) - 1;
+    const isPercent = match[3] === '%';
+    if (!isPercent) continue;
+
+    const before = desc.slice(Math.max(0, match.index - 60), match.index).toLowerCase();
+    const after = desc.slice(match.index, Math.min(desc.length, match.index + 40)).toLowerCase();
+    const isHealOrShieldContext = /heal|restore|shield|regenerat/.test(before);
+    // Skills like "deals N instance(s) of DMG, each instance dealing X%"
+    // are handled separately by getInstancedHitInfo — excluding them
+    // here avoids showing the same value twice, once as a generic Hit
+    // and once as an instanced hit.
+    const isInstanceContext = /instance/.test(before) || /instance/.test(after);
+    const mentionsDmg = /dmg/.test(before);
+
+    if (mentionsDmg && !isHealOrShieldContext && !isInstanceContext) indices.push(idx);
+  }
+  return [...new Set(indices)];
+}
+
+// Skills that fire a fixed number of extra damage instances (e.g.
+// Sparxie's Elation Skill: a base AoE hit, plus 20 fixed instances at a
+// separate % each to a random enemy) don't fit the main/adjacent Hit
+// model — the instance count is a stated number, not tied to how many
+// enemies are on the field. Parsed as its own pattern so its total can
+// be added on top of the base hit rather than confused with it.
+function getInstancedHitInfo(desc) {
+  if (!desc) return null;
+  const match = desc.match(
+    /(\d+)\s*(?:additional\s+)?instance\(s\) of DMG[\s\S]{0,60}?each instance deal(?:s|ing)[\s\S]{0,60}?([\d.]+)%/i
+  );
+  if (!match) return null;
+  return { instanceCount: Number(match[1]), perInstancePercent: Number(match[2]) / 100 };
+}
+
+// After finding which param indices are real damage values, this pulls
+// a human-readable target description from the text immediately
+// following each one — "to one designated enemy", "to adjacent
+// targets", "to all enemies", etc. — so the Hit selector can say what
+// each value actually means instead of a bare "Hit 1 / Hit 2".
+const TARGET_PHRASE_PATTERNS = [
+  { pattern: /to one (designated |target(ed)? )?enem(y|ies)/i, label: 'main target' },
+  { pattern: /adjacent (to (it|the target)|enem(y|ies)|targets)/i, label: 'adjacent targets' },
+  { pattern: /to all enem(y|ies)/i, label: 'all enemies' },
+  { pattern: /(to a |a )?random enem(y|ies)/i, label: 'random enemy' },
+  { pattern: /to the target/i, label: 'target' },
+];
+
+function getHitTargetLabel(desc, paramIndex) {
+  if (!desc) return null;
+  const regex = /#(\d+)\[(i|f1|f2)\](%?)/g;
+  let match;
+  while ((match = regex.exec(desc)) !== null) {
+    if (Number(match[1]) - 1 !== paramIndex) continue;
+    const context = desc.slice(match.index, Math.min(desc.length, match.index + 150));
+    const found = TARGET_PHRASE_PATTERNS.find(({ pattern }) => pattern.test(context));
+    return found ? found.label : null;
+  }
+  return null;
+}
+
+// Some characters' main/adjacent (Blast) hits get boosted by a *separate*
+// ability elsewhere in their kit (e.g. Sparxie's "Engagement Farming"
+// boosting her "Bloom! Winner Takes All" hit), rather than the attack's
+// own text. Scans across every ability's resolved text (not just the
+// one selected) for a "DMG multiplier against one designated enemy by
+// X% ... adjacent targets by Y%" pattern, and returns the per-trigger
+// bonus for each side plus which ability it came from, so the UI can
+// label the input meaningfully without hardcoding a character name.
+function getPerHitTargetStackingBonus(abilities) {
+  for (const a of abilities) {
+    const match = a.desc.match(
+      /multiplier against one designated enemy by ([\d.]+)%(?:[^%]*?multiplier against adjacent targets by ([\d.]+)%)?/i
+    );
+    if (match) {
+      return {
+        sourceName: a.name,
+        mainPerStack: Number(match[1]) / 100,
+        adjacentPerStack: match[2] ? Number(match[2]) / 100 : 0,
+      };
+    }
+  }
+  return null;
+}
+
 const ELEMENT_DMG_TYPE = {
   Physical: 'PhysicalAddedRatio',
   Fire: 'FireAddedRatio',
@@ -387,7 +485,7 @@ function dealsDirectDamage(skill) {
 // something the player can select and calculate a hit for. The
 // calculator's own skill picker is restricted to actual player-cast
 // attacks.
-const DIRECT_ATTACK_TYPES = new Set(['Basic ATK', 'Skill', 'Ultimate', 'Memosprite Skill']);
+const DIRECT_ATTACK_TYPES = new Set(['Basic ATK', 'Skill', 'Ultimate', 'Memosprite Skill', 'Elation Skill']);
 
 // A handful of skills (e.g. Little Ica's) don't scale off ATK/DEF/HP at
 // all — their base damage comes from some other tracked value, like a
@@ -398,6 +496,21 @@ function getNonStatScalingLabel(resolvedDesc) {
   if (!resolvedDesc) return null;
   if (/tally of healing/i.test(resolvedDesc)) return 'Healing tally this battle';
   return null;
+}
+
+// Some repeated-cast skills (e.g. Castorice's memosprite "Breath Scorches
+// the Shadow") show up as multiple skill IDs in the data, one per cast —
+// but only the FIRST entry's own description text actually states every
+// cast's multiplier ("...DMG multiplier increased progressively to
+// 39.2% / 47.6%..."); the later entries are generic flavor text with no
+// restated number. So later casts are modeled by parsing this pattern
+// out of the first entry's text rather than trusting the other skill
+// IDs to carry their own correct value.
+function getEscalatingMultipliers(resolvedDesc) {
+  if (!resolvedDesc) return null;
+  const match = resolvedDesc.match(/increas\w*\s+(?:progressively|respectively)\s+to\s+([\d.]+)%\s*\/\s*([\d.]+)%/i);
+  if (!match) return null;
+  return [Number(match[1]) / 100, Number(match[2]) / 100];
 }
 
 function isSelectableAttack(skill) {
@@ -534,6 +647,10 @@ export default function ProfilePage() {
   const [calcScalingStat, setCalcScalingStat] = useState('');
   const [calcScalingStatus, setCalcScalingStatus] = useState('idle');
   const [calcNonStatValue, setCalcNonStatValue] = useState(0);
+  const [calcParamIndex, setCalcParamIndex] = useState(0);
+  const [calcEnemyCount, setCalcEnemyCount] = useState(1);
+  const [calcActivationIndex, setCalcActivationIndex] = useState(0);
+  const [calcStackingTriggers, setCalcStackingTriggers] = useState(0);
   const [aiConditionals, setAiConditionals] = useState([]);
   const [aiConditionalStatus, setAiConditionalStatus] = useState('idle');
   const [aiConditionalError, setAiConditionalError] = useState('');
@@ -641,6 +758,10 @@ export default function ProfilePage() {
     setCalcSkillLevel(level);
     setCalcScalingStat('');
     setCalcNonStatValue(0);
+    setCalcParamIndex(0);
+    setCalcEnemyCount(1);
+    setCalcActivationIndex(0);
+    setCalcStackingTriggers(0);
     setAiConditionalStacks({});
 
     const skill = characterSkills[skillId];
@@ -1206,7 +1327,32 @@ export default function ProfilePage() {
 
               {showDamageCalc && (() => {
                 const skillIds = characterNames[activeCharacter.avatarId]?.skills || [];
-                const skill = characterSkills[calcSkillId];
+
+                // Some skills (e.g. Castorice's Memosprite Skill, castable
+                // up to 3 times with an escalating multiplier each time)
+                // are listed as multiple separate skill IDs sharing the
+                // same name and type_text — one per activation count,
+                // rather than one skill with a toggle. Group those
+                // together so the dropdown shows one entry, with a
+                // separate "Activation" selector for which cast to view.
+                const selectableIds = skillIds.filter((id) => isSelectableAttack(characterSkills[id]));
+                const activationGroups = {};
+                selectableIds.forEach((id) => {
+                  const s = characterSkills[id];
+                  const key = `${s.name}__${s.type_text}`;
+                  (activationGroups[key] = activationGroups[key] || []).push(id);
+                });
+                const selectedSkillKey = characterSkills[calcSkillId]
+                  ? `${characterSkills[calcSkillId].name}__${characterSkills[calcSkillId].type_text}`
+                  : null;
+                const activationVariantIds = selectedSkillKey ? activationGroups[selectedSkillKey] || [calcSkillId] : [calcSkillId];
+
+                // Always read from the first-listed variant — it's the
+                // one that carries real data (later entries are often
+                // just generic flavor text, as with Castorice's repeated
+                // memosprite casts). The count of variant IDs is still
+                // used as a signal that this skill has multiple casts.
+                const skill = characterSkills[activationVariantIds[0]];
                 const resolvedSkillDesc = skill ? formatLightConeDesc(skill.desc, skill.params[calcSkillLevel - 1]) : '';
                 const nonStatScalingLabel = getNonStatScalingLabel(resolvedSkillDesc);
 
@@ -1235,20 +1381,89 @@ export default function ProfilePage() {
                   return sum + (c.valuesByStack[stacks - 1] || 0);
                 }, 0);
 
-                const damage =
+                const levelParams = skill ? skill.params[calcSkillLevel - 1] || [] : [];
+                const damagePercentIndices = skill ? getDamagePercentParamIndices(skill.desc) : [];
+                // Fall back to just index 0 if the desc-parsing heuristic
+                // couldn't identify anything (better a single sane value
+                // than an empty selector).
+                const hitIndices = damagePercentIndices.length > 0 ? damagePercentIndices : [0];
+                const hasMultipleHitValues = hitIndices.length > 1;
+                const selectedHitIndex = hitIndices.includes(calcParamIndex) ? calcParamIndex : hitIndices[0];
+                const selectedHitTargetLabel =
+                  skill && (getHitTargetLabel(skill.desc, selectedHitIndex) || (selectedHitIndex === hitIndices[0] ? 'main target' : null));
+
+                const baseMultiplier = levelParams[selectedHitIndex];
+                const escalatingMultipliers = getEscalatingMultipliers(resolvedSkillDesc);
+                const activationMultipliers = escalatingMultipliers
+                  ? [baseMultiplier, ...escalatingMultipliers]
+                  : null;
+                const hasMultipleActivations = activationVariantIds.length > 1 && !!activationMultipliers;
+                const selectedActivationMultiplier = activationMultipliers
+                  ? activationMultipliers[calcActivationIndex] ?? activationMultipliers[0]
+                  : baseMultiplier;
+
+                // Cross-referenced per-hit stacking bonus (e.g. Sparxie's
+                // "Engagement Farming" boosting her main/adjacent hits by
+                // different amounts) — only relevant for Blast-style
+                // skills with distinct main/adjacent values.
+                const allAbilities = skillIds
+                  .map((id) => characterSkills[id])
+                  .filter(Boolean)
+                  .map((s) => ({
+                    name: s.name,
+                    desc: formatLightConeDesc(s.desc, s.params[s.params.length - 1]) || s.desc || '',
+                  }))
+                  .filter((a) => a.desc);
+                const perHitStackingBonus = hasMultipleHitValues ? getPerHitTargetStackingBonus(allAbilities) : null;
+                const getStackingDmgPercent = (hitIdx) => {
+                  if (!perHitStackingBonus) return 0;
+                  const perStack = hitIdx === hitIndices[0] ? perHitStackingBonus.mainPerStack : perHitStackingBonus.adjacentPerStack;
+                  return perStack * calcStackingTriggers * 100;
+                };
+
+                const computeHitDamage = (multiplierFraction, extraDmgPercent = 0) =>
                   skill && scalingValue != null
                     ? computeDamage({
                         scalingStatValue: scalingValue,
-                        skillMultiplierPercent: (skill.params[calcSkillLevel - 1]?.[0] || 0) * 100,
+                        skillMultiplierPercent: (multiplierFraction || 0) * 100,
                         characterLevel: activeCharacter.level,
                         enemyLevel: calcEnemyLevel,
                         enemyResPercent: calcEnemyRes,
                         defShredPercent: calcDefShred,
-                        elementalDmgPercent: elementalDmgPercent + allDmgPercent + aiDmgPercent,
+                        elementalDmgPercent: elementalDmgPercent + allDmgPercent + aiDmgPercent + extraDmgPercent,
                         critRatePercent: parseFloat(activeStats.critRate),
                         critDmgPercent: parseFloat(activeStats.critDmg),
                       })
                     : null;
+
+                const damage = computeHitDamage(selectedActivationMultiplier, getStackingDmgPercent(selectedHitIndex));
+
+                const instancedHitInfo = getInstancedHitInfo(resolvedSkillDesc);
+                const instancedHitDamage = instancedHitInfo ? computeHitDamage(instancedHitInfo.perInstancePercent) : null;
+                const instancedHitTotal =
+                  instancedHitDamage != null ? instancedHitDamage * instancedHitInfo.instanceCount : null;
+
+                // Blast-style skills (main + adjacent) carry two different
+                // per-hit values, so the total across N enemies sums the
+                // main hit once plus the adjacent hit for the rest. Skills
+                // with just one qualifying damage value (including
+                // repeated-cast skills, which hit "all enemies" uniformly)
+                // multiply straight across the enemy count instead. Any
+                // instanced-hit component (a fixed number of extra
+                // instances stated in the text, independent of enemy
+                // count) is added on top either way.
+                const baseTotalDamage =
+                  damage == null
+                    ? null
+                    : hasMultipleHitValues
+                      ? (computeHitDamage(levelParams[hitIndices[0]], getStackingDmgPercent(hitIndices[0])) || 0) +
+                        (computeHitDamage(levelParams[hitIndices[1]], getStackingDmgPercent(hitIndices[1])) || 0) * Math.max(0, calcEnemyCount - 1)
+                      : damage * calcEnemyCount;
+
+                const totalDamage =
+                  baseTotalDamage != null && instancedHitTotal != null
+                    ? baseTotalDamage + instancedHitTotal
+                    : baseTotalDamage;
 
                 return (
                   <div className="compare-overlay" onClick={() => setShowDamageCalc(false)}>
@@ -1298,18 +1513,40 @@ export default function ProfilePage() {
                           }}
                         >
                           <option value="">Select a skill...</option>
-                          {skillIds.map((id) => {
-                            const s = characterSkills[id];
-                            if (!isSelectableAttack(s)) return null;
-                            return (
-                              <option key={id} value={id}>
-                                {s.type_text ? `${s.type_text}: ` : ''}
-                                {s.name}
-                              </option>
-                            );
-                          })}
+                          {(() => {
+                            const seenGroupKeys = new Set();
+                            return skillIds.map((id) => {
+                              const s = characterSkills[id];
+                              if (!isSelectableAttack(s)) return null;
+                              const key = `${s.name}__${s.type_text}`;
+                              if (seenGroupKeys.has(key)) return null;
+                              seenGroupKeys.add(key);
+                              return (
+                                <option key={id} value={id}>
+                                  {s.type_text ? `${s.type_text}: ` : ''}
+                                  {s.name}
+                                </option>
+                              );
+                            });
+                          })()}
                         </select>
                       </div>
+
+                      {hasMultipleActivations && (
+                        <div className="compare-form-row">
+                          <span className="calc-inline-label">Activation</span>
+                          <select
+                            value={calcActivationIndex}
+                            onChange={(e) => setCalcActivationIndex(Number(e.target.value))}
+                          >
+                            {activationMultipliers.map((_, i) => (
+                              <option key={i} value={i}>
+                                Cast {i + 1}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
 
                       {skill && (
                         <>
@@ -1415,11 +1652,67 @@ export default function ProfilePage() {
                             onChange={(e) => setCalcDefShred(Number(e.target.value))}
                           />
                         </div>
+                        {hasMultipleHitValues && (
+                          <div className="compare-weight-row">
+                            <span>Hit shown below</span>
+                            <select
+                              value={selectedHitIndex}
+                              onChange={(e) => setCalcParamIndex(Number(e.target.value))}
+                            >
+                              {hitIndices.map((paramIdx, i) => {
+                                const targetLabel = getHitTargetLabel(skill.desc, paramIdx);
+                                const fallback = i === 0 ? 'main target' : null;
+                                const shown = targetLabel || fallback;
+                                return (
+                                  <option key={paramIdx} value={paramIdx}>
+                                    Hit {i + 1}{shown ? ` (${shown})` : ''}
+                                  </option>
+                                );
+                              })}
+                            </select>
+                          </div>
+                        )}
+                        {perHitStackingBonus && (
+                          <div className="compare-weight-row">
+                            <span>{perHitStackingBonus.sourceName} triggers</span>
+                            <input
+                              type="number"
+                              min="0"
+                              value={calcStackingTriggers}
+                              onChange={(e) => setCalcStackingTriggers(Math.max(0, Number(e.target.value) || 0))}
+                            />
+                          </div>
+                        )}
+                        <div className="compare-weight-row">
+                          <span>Enemies hit</span>
+                          <input
+                            type="number"
+                            min="1"
+                            value={calcEnemyCount}
+                            onChange={(e) => setCalcEnemyCount(Math.max(1, Number(e.target.value) || 1))}
+                          />
+                        </div>
                       </div>
 
                       {damage != null && (
                         <p className="damage-calc-result">
-                          Estimated DMG: <strong>{Math.round(damage).toLocaleString()}</strong>
+                          Estimated DMG
+                          {hasMultipleActivations ? ` (Cast ${calcActivationIndex + 1})` : ''}
+                          {hasMultipleHitValues ? ` (Hit ${hitIndices.indexOf(selectedHitIndex) + 1}${selectedHitTargetLabel ? `: ${selectedHitTargetLabel}` : ''})` : ''}:{' '}
+                          <strong>{Math.round(damage).toLocaleString()}</strong>
+                        </p>
+                      )}
+                      {instancedHitDamage != null && (
+                        <p className="damage-calc-result">
+                          Each instance ({(instancedHitInfo.perInstancePercent * 100).toFixed(1)}%):{' '}
+                          <strong>{Math.round(instancedHitDamage).toLocaleString()}</strong> × {instancedHitInfo.instanceCount} ={' '}
+                          <strong>{Math.round(instancedHitTotal).toLocaleString()}</strong>
+                        </p>
+                      )}
+                      {totalDamage != null && (calcEnemyCount > 1 || instancedHitTotal != null) && (
+                        <p className="damage-calc-result">
+                          Total DMG ({calcEnemyCount} enem{calcEnemyCount === 1 ? 'y' : 'ies'}
+                          {instancedHitTotal != null ? ' + instances' : ''}): <strong>{Math.round(totalDamage).toLocaleString()}</strong>
                         </p>
                       )}
                     </div>
