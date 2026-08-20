@@ -653,6 +653,7 @@ export default function ProfilePage() {
   const [calcMerrymakePercent, setCalcMerrymakePercent] = useState(0);
   const [calcParamIndex, setCalcParamIndex] = useState(0);
   const [calcEnemyCount, setCalcEnemyCount] = useState(1);
+  const [calcEnemyBroken, setCalcEnemyBroken] = useState(true);
   const [calcActivationIndex, setCalcActivationIndex] = useState(0);
   const [calcStackingTriggers, setCalcStackingTriggers] = useState(0);
   const [aiConditionals, setAiConditionals] = useState([]);
@@ -1437,6 +1438,8 @@ export default function ProfilePage() {
                 const computeHitDamage = (multiplierFraction, extraDmgPercent = 0) => {
                   if (!skill) return null;
 
+                  const brokenMultiplier = calcEnemyBroken ? 1.0 : 0.9;
+
                   if (isElation) {
                     return computeElationDamage({
                       abilityMultiplierPercent: (multiplierFraction || 0) * 100,
@@ -1450,6 +1453,7 @@ export default function ProfilePage() {
                       critDmgPercent: parseFloat(activeStats.critDmg),
                       enemyResPercent: calcEnemyRes,
                       defReductionPercent: calcDefShred,
+                      brokenMultiplier,
                     });
                   }
 
@@ -1464,6 +1468,7 @@ export default function ProfilePage() {
                         elementalDmgPercent: elementalDmgPercent + allDmgPercent + aiDmgPercent + extraDmgPercent,
                         critRatePercent: parseFloat(activeStats.critRate),
                         critDmgPercent: parseFloat(activeStats.critDmg),
+                        brokenMultiplier,
                       })
                     : null;
                 };
@@ -1727,6 +1732,16 @@ export default function ProfilePage() {
                             value={calcDefShred}
                             onChange={(e) => setCalcDefShred(Number(e.target.value))}
                           />
+                        </div>
+                        <div className="compare-weight-row">
+                          <label className="calc-inline-label">
+                            <input
+                              type="checkbox"
+                              checked={calcEnemyBroken}
+                              onChange={(e) => setCalcEnemyBroken(e.target.checked)}
+                            />
+                            {' '}Enemy is Toughness Broken
+                          </label>
                         </div>
                         {hasMultipleHitValues && (
                           <div className="compare-weight-row">
