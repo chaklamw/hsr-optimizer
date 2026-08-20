@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { computeDamage } from './damageCalculator';
+import { computeDamage, computeElationDamage, DamageType } from './damageCalculator';
 
 const CHARACTER_NAMES_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/characters.json';
 const LIGHT_CONE_NAMES_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/light_cones.json';
@@ -411,7 +411,7 @@ const ELEMENT_DMG_TYPE = {
   Imaginary: 'ImaginaryAddedRatio',
 };
 
-async function interpretSkillScaling(description) {
+async function interpretSkill(description) {
   const res = await fetch('http://localhost:3001/api/interpret-skill', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -419,7 +419,7 @@ async function interpretSkillScaling(description) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `Server responded ${res.status}`);
-  return data.scalingStat;
+  return { damageType: data.damageType, scalingStat: data.scalingStat };
 }
 
 async function extractConditionals(characterName, abilities) {
@@ -647,6 +647,10 @@ export default function ProfilePage() {
   const [calcScalingStat, setCalcScalingStat] = useState('');
   const [calcScalingStatus, setCalcScalingStatus] = useState('idle');
   const [calcNonStatValue, setCalcNonStatValue] = useState(0);
+  const [calcDamageType, setCalcDamageType] = useState(DamageType.STANDARD);
+  const [calcPunchlineValue, setCalcPunchlineValue] = useState(0);
+  const [calcUsingCertifiedBanger, setCalcUsingCertifiedBanger] = useState(false);
+  const [calcMerrymakePercent, setCalcMerrymakePercent] = useState(0);
   const [calcParamIndex, setCalcParamIndex] = useState(0);
   const [calcEnemyCount, setCalcEnemyCount] = useState(1);
   const [calcActivationIndex, setCalcActivationIndex] = useState(0);
@@ -757,11 +761,15 @@ export default function ProfilePage() {
     setCalcSkillId(skillId);
     setCalcSkillLevel(level);
     setCalcScalingStat('');
+    setCalcDamageType(DamageType.STANDARD);
     setCalcNonStatValue(0);
     setCalcParamIndex(0);
     setCalcEnemyCount(1);
     setCalcActivationIndex(0);
     setCalcStackingTriggers(0);
+    setCalcPunchlineValue(0);
+    setCalcUsingCertifiedBanger(false);
+    setCalcMerrymakePercent(0);
     setAiConditionalStacks({});
 
     const skill = characterSkills[skillId];
@@ -777,8 +785,9 @@ export default function ProfilePage() {
 
     setCalcScalingStatus('loading');
     try {
-      const stat = await interpretSkillScaling(resolvedDesc);
-      setCalcScalingStat(stat === 'NONE' ? '' : stat);
+      const { damageType, scalingStat } = await interpretSkill(resolvedDesc);
+      setCalcDamageType(damageType === 'ELATION' ? DamageType.ELATION : DamageType.STANDARD);
+      setCalcScalingStat(scalingStat === 'NONE' ? '' : scalingStat);
       setCalcScalingStatus('done');
     } catch (err) {
       console.error('Skill scaling detection failed:', err);
@@ -1371,6 +1380,10 @@ export default function ProfilePage() {
                 const allDmgPercent = activeStats?.genericStats.AllDamageTypeAddedRatio
                   ? activeStats.genericStats.AllDamageTypeAddedRatio * 100
                   : 0;
+                const isElation = calcDamageType === DamageType.ELATION;
+                const elationPercent = activeStats?.genericStats.ElationDamageAddedRatio
+                  ? activeStats.genericStats.ElationDamageAddedRatio * 100
+                  : 0;
 
                 const matchedAiConditionals = skill
                   ? aiConditionals.filter((c) => conditionalAppliesToSkill(c, skill.type_text))
@@ -1421,8 +1434,26 @@ export default function ProfilePage() {
                   return perStack * calcStackingTriggers * 100;
                 };
 
-                const computeHitDamage = (multiplierFraction, extraDmgPercent = 0) =>
-                  skill && scalingValue != null
+                const computeHitDamage = (multiplierFraction, extraDmgPercent = 0) => {
+                  if (!skill) return null;
+
+                  if (isElation) {
+                    return computeElationDamage({
+                      abilityMultiplierPercent: (multiplierFraction || 0) * 100,
+                      characterLevel: activeCharacter.level,
+                      enemyLevel: calcEnemyLevel,
+                      elationPercent,
+                      merrymakePercent: calcMerrymakePercent,
+                      punchlineValue: calcPunchlineValue,
+                      usingCertifiedBanger: calcUsingCertifiedBanger,
+                      critRatePercent: parseFloat(activeStats.critRate),
+                      critDmgPercent: parseFloat(activeStats.critDmg),
+                      enemyResPercent: calcEnemyRes,
+                      defReductionPercent: calcDefShred,
+                    });
+                  }
+
+                  return scalingValue != null
                     ? computeDamage({
                         scalingStatValue: scalingValue,
                         skillMultiplierPercent: (multiplierFraction || 0) * 100,
@@ -1435,6 +1466,7 @@ export default function ProfilePage() {
                         critDmgPercent: parseFloat(activeStats.critDmg),
                       })
                     : null;
+                };
 
                 const damage = computeHitDamage(selectedActivationMultiplier, getStackingDmgPercent(selectedHitIndex));
 
@@ -1579,22 +1611,66 @@ export default function ProfilePage() {
                             </div>
                           ) : (
                             <>
-                              <div className="compare-form-row">
-                                <span className="calc-inline-label">Scaling stat</span>
-                                <select value={calcScalingStat} onChange={(e) => setCalcScalingStat(e.target.value)}>
-                                  <option value="">None detected</option>
-                                  <option value="ATK">ATK</option>
-                                  <option value="DEF">DEF</option>
-                                  <option value="HP">HP</option>
-                                </select>
-                              </div>
                               {calcScalingStatus === 'loading' && (
-                                <p className="compare-ocr-note">Detecting scaling stat...</p>
+                                <p className="compare-ocr-note">Detecting damage type...</p>
                               )}
                               {calcScalingStatus === 'error' && (
                                 <p className="compare-ocr-note compare-ocr-note-warn">
-                                  Couldn't reach the detection service — pick the scaling stat manually.
+                                  Couldn't reach the detection service — pick the scaling stat manually
+                                  (defaults to standard damage).
                                 </p>
+                              )}
+
+                              {isElation ? (
+                                <>
+                                  <p className="compare-ocr-note ai-disclaimer">
+                                    ⚠️ Elation DMG detected — this uses a different formula (no ATK/DEF/HP
+                                    scaling, no DMG Boost). Live combat values like Punchline and Merrymake
+                                    still need to be entered manually below.
+                                  </p>
+                                  <div className="compare-form-row">
+                                    <label className="calc-inline-label">
+                                      Punchline / Certified Banger value
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        value={calcPunchlineValue}
+                                        onChange={(e) => setCalcPunchlineValue(Number(e.target.value) || 0)}
+                                      />
+                                    </label>
+                                  </div>
+                                  <div className="compare-form-row">
+                                    <label className="calc-inline-label">
+                                      <input
+                                        type="checkbox"
+                                        checked={calcUsingCertifiedBanger}
+                                        onChange={(e) => setCalcUsingCertifiedBanger(e.target.checked)}
+                                      />
+                                      {' '}Using Certified Banger state (value above is Certified Banger, not live Punchline)
+                                    </label>
+                                  </div>
+                                  <div className="compare-form-row">
+                                    <label className="calc-inline-label">
+                                      Merrymake %
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        value={calcMerrymakePercent}
+                                        onChange={(e) => setCalcMerrymakePercent(Number(e.target.value) || 0)}
+                                      />
+                                    </label>
+                                  </div>
+                                </>
+                              ) : (
+                                <div className="compare-form-row">
+                                  <span className="calc-inline-label">Scaling stat</span>
+                                  <select value={calcScalingStat} onChange={(e) => setCalcScalingStat(e.target.value)}>
+                                    <option value="">None detected</option>
+                                    <option value="ATK">ATK</option>
+                                    <option value="DEF">DEF</option>
+                                    <option value="HP">HP</option>
+                                  </select>
+                                </div>
                               )}
                             </>
                           )}

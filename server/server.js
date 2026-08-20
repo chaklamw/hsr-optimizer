@@ -56,10 +56,12 @@ app.post('/api/interpret-skill', async (req, res) => {
 
 Skill description: "${description}"
 
-Which single stat does this skill's damage or effect primarily scale from: ATK, DEF, or HP? If it scales from more than one, pick the one that contributes the most to its primary effect. If the skill doesn't scale from any of these three, respond with NONE.
+First, determine the damage type this skill deals: STANDARD or ELATION. ELATION applies only if the description explicitly says the skill deals Elation DMG (associated with the Path of Elation, Aha, Punchline, Certified Banger, or Merrymake). If there's no mention of Elation DMG, it's STANDARD.
+
+Second, if the damage type is STANDARD, determine which single stat the skill's damage or effect primarily scales from: ATK, DEF, or HP. If it scales from more than one, pick the one that contributes the most to its primary effect. If the skill doesn't scale from any of these three, respond with NONE. If the damage type is ELATION, respond with NONE for scalingStat, since Elation DMG doesn't scale from ATK, DEF, or HP.
 
 Respond with ONLY a JSON object in this exact shape, no other text, no markdown formatting:
-{"scalingStat": "ATK" | "DEF" | "HP" | "NONE"}`;
+{"damageType": "STANDARD" | "ELATION", "scalingStat": "ATK" | "DEF" | "HP" | "NONE"}`;
 
   try {
     const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -98,13 +100,20 @@ Respond with ONLY a JSON object in this exact shape, no other text, no markdown 
       return;
     }
 
+    const validDamageTypes = ['STANDARD', 'ELATION'];
     const validStats = ['ATK', 'DEF', 'HP', 'NONE'];
+
+    if (!validDamageTypes.includes(parsed.damageType)) {
+      res.status(502).json({ error: 'Model returned an unexpected damageType', raw: parsed });
+      return;
+    }
+
     if (!validStats.includes(parsed.scalingStat)) {
       res.status(502).json({ error: 'Model returned an unexpected value', raw: parsed });
       return;
     }
 
-    res.json({ scalingStat: parsed.scalingStat });
+    res.json({ damageType: parsed.damageType, scalingStat: parsed.scalingStat });
   } catch (err) {
     console.log('Error calling Groq:', err);
     res.status(500).json({ error: 'Failed to interpret skill' });
