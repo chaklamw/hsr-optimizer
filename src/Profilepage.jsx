@@ -448,6 +448,18 @@ function conditionalAppliesToSkill(conditional, skillTypeText) {
   return conditional.appliesToAbility === TYPE_TEXT_TO_ABILITY[skillTypeText];
 }
 
+const CONDITIONAL_STAT_TYPES = [
+  'DMG_PERCENT',
+  'RES_PEN',
+  'DEF_PEN',
+  'CRIT_RATE',
+  'CRIT_DMG',
+  'ATK_PERCENT',
+  'VULNERABILITY',
+  'OTHER',
+];
+const CONDITIONAL_ABILITY_TARGETS = ['ALL', 'BASIC', 'SKILL', 'ULT', 'FUA', 'DOT'];
+
 // StarRailRes lists some non-damage entries alongside real attacks — e.g.
 // Archer's "Skill: End", a state-exit toggle with no scaling values, but
 // also heal/shield/buff/summon skills that DO carry nonzero params (heal
@@ -657,6 +669,13 @@ export default function ProfilePage() {
   const [calcActivationIndex, setCalcActivationIndex] = useState(0);
   const [calcStackingTriggers, setCalcStackingTriggers] = useState(0);
   const [aiConditionals, setAiConditionals] = useState([]);
+  const [manualConditionals, setManualConditionals] = useState([]);
+  const [manualConditionalForm, setManualConditionalForm] = useState({
+    name: '',
+    appliesToAbility: 'ALL',
+    statType: 'RES_PEN',
+    value: 0,
+  });
   const [aiConditionalStatus, setAiConditionalStatus] = useState('idle');
   const [aiConditionalError, setAiConditionalError] = useState('');
   const [aiConditionalStacks, setAiConditionalStacks] = useState({});
@@ -1389,11 +1408,27 @@ export default function ProfilePage() {
                 const matchedAiConditionals = skill
                   ? aiConditionals.filter((c) => conditionalAppliesToSkill(c, skill.type_text))
                   : [];
-                const aiDmgPercent = matchedAiConditionals.reduce((sum, c) => {
+                const matchedManualConditionals = skill
+                  ? manualConditionals.filter((c) => conditionalAppliesToSkill(c, skill.type_text))
+                  : [];
+                const matchedAllConditionals = [...matchedAiConditionals, ...matchedManualConditionals];
+                const aiDmgPercent = matchedAllConditionals.reduce((sum, c) => {
                   if (c.statType !== 'DMG_PERCENT') return sum;
                   const stacks = aiConditionalStacks[c.name] || 0;
                   return sum + (c.valuesByStack[stacks - 1] || 0);
                 }, 0);
+                const aiResPenPercent = matchedAllConditionals.reduce((sum, c) => {
+                  if (c.statType !== 'RES_PEN') return sum;
+                  const stacks = aiConditionalStacks[c.name] || 0;
+                  return sum + (c.valuesByStack[stacks - 1] || 0);
+                }, 0);
+                const aiDefPenPercent = matchedAllConditionals.reduce((sum, c) => {
+                  if (c.statType !== 'DEF_PEN') return sum;
+                  const stacks = aiConditionalStacks[c.name] || 0;
+                  return sum + (c.valuesByStack[stacks - 1] || 0);
+                }, 0);
+                const effectiveEnemyRes = calcEnemyRes - aiResPenPercent;
+                const effectiveDefShred = calcDefShred + aiDefPenPercent;
 
                 const levelParams = skill ? skill.params[calcSkillLevel - 1] || [] : [];
                 const damagePercentIndices = skill ? getDamagePercentParamIndices(skill.desc) : [];
@@ -1451,8 +1486,8 @@ export default function ProfilePage() {
                       usingCertifiedBanger: calcUsingCertifiedBanger,
                       critRatePercent: parseFloat(activeStats.critRate),
                       critDmgPercent: parseFloat(activeStats.critDmg),
-                      enemyResPercent: calcEnemyRes,
-                      defReductionPercent: calcDefShred,
+                      enemyResPercent: effectiveEnemyRes,
+                      defReductionPercent: effectiveDefShred,
                       brokenMultiplier,
                     });
                   }
@@ -1463,8 +1498,8 @@ export default function ProfilePage() {
                         skillMultiplierPercent: (multiplierFraction || 0) * 100,
                         characterLevel: activeCharacter.level,
                         enemyLevel: calcEnemyLevel,
-                        enemyResPercent: calcEnemyRes,
-                        defShredPercent: calcDefShred,
+                        enemyResPercent: effectiveEnemyRes,
+                        defShredPercent: effectiveDefShred,
                         elementalDmgPercent: elementalDmgPercent + allDmgPercent + aiDmgPercent + extraDmgPercent,
                         critRatePercent: parseFloat(activeStats.critRate),
                         critDmgPercent: parseFloat(activeStats.critDmg),
@@ -1687,6 +1722,12 @@ export default function ProfilePage() {
                                 <p className="compare-ocr-note ai-disclaimer">
                                   ⚠️ AI-extracted — {c.trigger} — verify against current patch
                                 </p>
+                                {c.suspicious && (
+                                  <p className="compare-ocr-note compare-ocr-note-warn">
+                                    ⚠️ One or more values looked implausible and were zeroed out — check
+                                    the wiki and consider adding this as a manual effect instead.
+                                  </p>
+                                )}
                               </div>
                               <select
                                 value={aiConditionalStacks[c.name] || 0}
@@ -1705,6 +1746,121 @@ export default function ProfilePage() {
                               </select>
                             </div>
                           ))}
+
+                          {matchedManualConditionals.map((c) => (
+                            <div key={c.name} className="compare-form-row ai-conditional-row">
+                              <div>
+                                <span className="calc-inline-label">{c.name}</span>
+                                <p className="compare-ocr-note">
+                                  Manually added — {c.statType} — {c.appliesToAbility}
+                                </p>
+                              </div>
+                              <select
+                                value={aiConditionalStacks[c.name] || 0}
+                                onChange={(e) =>
+                                  setAiConditionalStacks((prev) => ({
+                                    ...prev,
+                                    [c.name]: Number(e.target.value),
+                                  }))
+                                }
+                              >
+                                {Array.from({ length: c.maxStacks + 1 }, (_, n) => (
+                                  <option key={n} value={n}>
+                                    {n}
+                                  </option>
+                                ))}
+                              </select>
+                              <button
+                                type="button"
+                                className="compare-remove-btn"
+                                onClick={() =>
+                                  setManualConditionals((prev) => prev.filter((m) => m.name !== c.name))
+                                }
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          ))}
+
+                          <div className="compare-form-row ai-conditional-row">
+                            <div className="manual-conditional-form">
+                              <input
+                                type="text"
+                                placeholder="Effect name (e.g. Netherwing RES Reduction)"
+                                value={manualConditionalForm.name}
+                                onChange={(e) =>
+                                  setManualConditionalForm((prev) => ({ ...prev, name: e.target.value }))
+                                }
+                              />
+                              <select
+                                value={manualConditionalForm.appliesToAbility}
+                                onChange={(e) =>
+                                  setManualConditionalForm((prev) => ({
+                                    ...prev,
+                                    appliesToAbility: e.target.value,
+                                  }))
+                                }
+                              >
+                                {CONDITIONAL_ABILITY_TARGETS.map((t) => (
+                                  <option key={t} value={t}>
+                                    {t}
+                                  </option>
+                                ))}
+                              </select>
+                              <select
+                                value={manualConditionalForm.statType}
+                                onChange={(e) =>
+                                  setManualConditionalForm((prev) => ({ ...prev, statType: e.target.value }))
+                                }
+                              >
+                                {CONDITIONAL_STAT_TYPES.map((t) => (
+                                  <option key={t} value={t}>
+                                    {t}
+                                  </option>
+                                ))}
+                              </select>
+                              <input
+                                type="number"
+                                placeholder="Value %"
+                                value={manualConditionalForm.value}
+                                onChange={(e) =>
+                                  setManualConditionalForm((prev) => ({
+                                    ...prev,
+                                    value: Number(e.target.value) || 0,
+                                  }))
+                                }
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const name = manualConditionalForm.name.trim();
+                                  if (!name) return;
+                                  const nameTaken =
+                                    aiConditionals.some((c) => c.name === name) ||
+                                    manualConditionals.some((c) => c.name === name);
+                                  if (nameTaken) return;
+                                  setManualConditionals((prev) => [
+                                    ...prev,
+                                    {
+                                      name,
+                                      appliesToAbility: manualConditionalForm.appliesToAbility,
+                                      statType: manualConditionalForm.statType,
+                                      valuesByStack: [manualConditionalForm.value],
+                                      maxStacks: 1,
+                                    },
+                                  ]);
+                                  setManualConditionalForm({
+                                    name: '',
+                                    appliesToAbility: 'ALL',
+                                    statType: 'RES_PEN',
+                                    value: 0,
+                                  });
+                                }}
+                              >
+                                Add effect
+                              </button>
+                            </div>
+                          </div>
                         </>
                       )}
 
@@ -1718,7 +1874,10 @@ export default function ProfilePage() {
                           />
                         </div>
                         <div className="compare-weight-row">
-                          <span>Enemy RES %</span>
+                          <span>
+                            Enemy RES %
+                            {aiResPenPercent > 0 && ` (${effectiveEnemyRes}% effective, -${aiResPenPercent}% detected)`}
+                          </span>
                           <input
                             type="number"
                             value={calcEnemyRes}
@@ -1726,7 +1885,10 @@ export default function ProfilePage() {
                           />
                         </div>
                         <div className="compare-weight-row">
-                          <span>DEF Shred %</span>
+                          <span>
+                            DEF Shred %
+                            {aiDefPenPercent > 0 && ` (${effectiveDefShred}% effective, +${aiDefPenPercent}% detected)`}
+                          </span>
                           <input
                             type="number"
                             value={calcDefShred}
