@@ -468,13 +468,20 @@ const CONDITIONAL_ABILITY_TARGETS = ['ALL', 'BASIC', 'SKILL', 'ULT', 'FUA', 'DOT
 // passing (e.g. "increases DMG dealt by X%", "DMG Boost effect") — which
 // is exactly what's wanted when gathering ability text for the AI
 // conditional detector, since that's where such buffs get read from.
+//
+// Some conditional buffs (e.g. Castorice's Talent: "+20% DMG per stack")
+// are flat, non-level-scaled numbers baked directly into the description
+// with no #1[i]%-style placeholder, so they carry no numeric params at
+// all — resolving via params first, falling back to the raw desc, keeps
+// those from being excluded just for lacking scaling values.
 function mentionsDamage(skill) {
-  if (!skill || !Array.isArray(skill.params) || skill.params.length === 0) return false;
-  const firstLevelParams = skill.params[0];
-  if (!Array.isArray(firstLevelParams) || firstLevelParams.length === 0) return false;
-  if (!firstLevelParams.some((v) => v > 0)) return false;
-
-  const resolvedDesc = formatLightConeDesc(skill.desc, firstLevelParams) || skill.desc || '';
+  if (!skill) return false;
+  const firstLevelParams = Array.isArray(skill.params) ? skill.params[0] : null;
+  const resolvedDesc =
+    (Array.isArray(firstLevelParams) && firstLevelParams.length > 0
+      ? formatLightConeDesc(skill.desc, firstLevelParams)
+      : null) || skill.desc || '';
+  if (!resolvedDesc) return false;
   return /dmg/i.test(resolvedDesc);
 }
 
@@ -1412,23 +1419,34 @@ export default function ProfilePage() {
                   ? manualConditionals.filter((c) => conditionalAppliesToSkill(c, skill.type_text))
                   : [];
                 const matchedAllConditionals = [...matchedAiConditionals, ...matchedManualConditionals];
-                const aiDmgPercent = matchedAllConditionals.reduce((sum, c) => {
-                  if (c.statType !== 'DMG_PERCENT') return sum;
-                  const stacks = aiConditionalStacks[c.name] || 0;
-                  return sum + (c.valuesByStack[stacks - 1] || 0);
-                }, 0);
-                const aiResPenPercent = matchedAllConditionals.reduce((sum, c) => {
-                  if (c.statType !== 'RES_PEN') return sum;
-                  const stacks = aiConditionalStacks[c.name] || 0;
-                  return sum + (c.valuesByStack[stacks - 1] || 0);
-                }, 0);
-                const aiDefPenPercent = matchedAllConditionals.reduce((sum, c) => {
-                  if (c.statType !== 'DEF_PEN') return sum;
-                  const stacks = aiConditionalStacks[c.name] || 0;
-                  return sum + (c.valuesByStack[stacks - 1] || 0);
-                }, 0);
+                const sumConditionalStat = (statType) =>
+                  matchedAllConditionals.reduce((sum, c) => {
+                    if (c.statType !== statType) return sum;
+                    const stacks = aiConditionalStacks[c.name] || 0;
+                    return sum + (c.valuesByStack[stacks - 1] || 0);
+                  }, 0);
+
+                const aiDmgPercent = sumConditionalStat('DMG_PERCENT');
+                const aiResPenPercent = sumConditionalStat('RES_PEN');
+                const aiDefPenPercent = sumConditionalStat('DEF_PEN');
+                const aiVulnerabilityPercent = sumConditionalStat('VULNERABILITY');
+                const aiCritRateBonus = sumConditionalStat('CRIT_RATE');
+                const aiCritDmgBonus = sumConditionalStat('CRIT_DMG');
+                const aiAtkPercentBonus = sumConditionalStat('ATK_PERCENT');
                 const effectiveEnemyRes = calcEnemyRes - aiResPenPercent;
                 const effectiveDefShred = calcDefShred + aiDefPenPercent;
+                const effectiveCritRatePercent = parseFloat(activeStats.critRate) + aiCritRateBonus;
+                const effectiveCritDmgPercent = parseFloat(activeStats.critDmg) + aiCritDmgBonus;
+                // ATK_PERCENT conditionals only matter when the skill actually
+                // scales off ATK — applied on top of the already-computed total
+                // ATK (base + all other bonuses), which slightly overstates a
+                // buff meant to apply to base ATK only, but is a reasonable
+                // approximation consistent with how elementalDmgPercent etc.
+                // are already handled as flat additive percents in this calc.
+                const effectiveScalingValue =
+                  scalingKey === 'atk' && typeof scalingValue === 'number'
+                    ? scalingValue * (1 + aiAtkPercentBonus / 100)
+                    : scalingValue;
 
                 const levelParams = skill ? skill.params[calcSkillLevel - 1] || [] : [];
                 const damagePercentIndices = skill ? getDamagePercentParamIndices(skill.desc) : [];
@@ -1484,25 +1502,27 @@ export default function ProfilePage() {
                       merrymakePercent: calcMerrymakePercent,
                       punchlineValue: calcPunchlineValue,
                       usingCertifiedBanger: calcUsingCertifiedBanger,
-                      critRatePercent: parseFloat(activeStats.critRate),
-                      critDmgPercent: parseFloat(activeStats.critDmg),
+                      critRatePercent: effectiveCritRatePercent,
+                      critDmgPercent: effectiveCritDmgPercent,
                       enemyResPercent: effectiveEnemyRes,
                       defReductionPercent: effectiveDefShred,
+                      vulnerabilityPercent: aiVulnerabilityPercent,
                       brokenMultiplier,
                     });
                   }
 
-                  return scalingValue != null
+                  return effectiveScalingValue != null
                     ? computeDamage({
-                        scalingStatValue: scalingValue,
+                        scalingStatValue: effectiveScalingValue,
                         skillMultiplierPercent: (multiplierFraction || 0) * 100,
                         characterLevel: activeCharacter.level,
                         enemyLevel: calcEnemyLevel,
                         enemyResPercent: effectiveEnemyRes,
                         defShredPercent: effectiveDefShred,
                         elementalDmgPercent: elementalDmgPercent + allDmgPercent + aiDmgPercent + extraDmgPercent,
-                        critRatePercent: parseFloat(activeStats.critRate),
-                        critDmgPercent: parseFloat(activeStats.critDmg),
+                        critRatePercent: effectiveCritRatePercent,
+                        critDmgPercent: effectiveCritDmgPercent,
+                        vulnerabilityPercent: aiVulnerabilityPercent,
                         brokenMultiplier,
                       })
                     : null;
@@ -1718,14 +1738,16 @@ export default function ProfilePage() {
                           {matchedAiConditionals.map((c) => (
                             <div key={c.name} className="compare-form-row ai-conditional-row">
                               <div>
-                                <span className="calc-inline-label">{c.name}</span>
+                                <span className="calc-inline-label">
+                                  {c.name} <span className="conditional-stat-type-tag">{c.statType}</span>
+                                </span>
                                 <p className="compare-ocr-note ai-disclaimer">
                                   ⚠️ AI-extracted — {c.trigger} — verify against current patch
                                 </p>
                                 {c.suspicious && (
                                   <p className="compare-ocr-note compare-ocr-note-warn">
-                                    ⚠️ One or more values looked implausible and were zeroed out — check
-                                    the wiki and consider adding this as a manual effect instead.
+                                    ⚠️ {c.suspiciousNote || 'Something about this looked off'} — check the
+                                    wiki and consider adding this as a manual effect instead if it's wrong.
                                   </p>
                                 )}
                               </div>

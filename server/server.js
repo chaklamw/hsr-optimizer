@@ -59,6 +59,7 @@ function sanitizeConditionals(rawConditionals) {
     .filter((c) => c && typeof c.name === 'string' && c.name.trim() && Array.isArray(c.valuesByStack))
     .map((c) => {
       let suspicious = false;
+      let suspiciousNote = '';
 
       const appliesToAbility = VALID_ABILITY_TARGETS.has(c.appliesToAbility) ? c.appliesToAbility : 'ALL';
       if (appliesToAbility !== c.appliesToAbility) suspicious = true;
@@ -66,19 +67,33 @@ function sanitizeConditionals(rawConditionals) {
       const statType = VALID_STAT_TYPES.has(c.statType) ? c.statType : 'OTHER';
       if (statType !== c.statType) suspicious = true;
 
-      const valuesByStack = c.valuesByStack.map((v) => {
+      let valuesByStack = c.valuesByStack.map((v) => {
         if (typeof v !== 'number' || !Number.isFinite(v) || Math.abs(v) > PERCENT_SANITY_CEILING) {
           suspicious = true;
+          suspiciousNote = 'a value looked implausible and was zeroed out';
           return 0;
         }
         return v;
       });
 
       const requestedMaxStacks = Number(c.maxStacks);
-      const maxStacks = Number.isFinite(requestedMaxStacks)
-        ? Math.max(1, Math.min(requestedMaxStacks, valuesByStack.length))
-        : valuesByStack.length;
-      if (maxStacks !== requestedMaxStacks) suspicious = true;
+      let maxStacks = Number.isFinite(requestedMaxStacks) ? Math.max(1, requestedMaxStacks) : valuesByStack.length;
+
+      if (valuesByStack.length === 1 && maxStacks > 1) {
+        // The model described a stacking effect but gave one "per stack"
+        // number instead of the full cumulative array the prompt asked
+        // for (e.g. "25% per stack, up to 3 stacks" -> [25] / maxStacks 3
+        // instead of [25, 50, 75]). Extrapolate linearly rather than
+        // silently discarding the stacks it clearly described.
+        const perStack = valuesByStack[0];
+        valuesByStack = Array.from({ length: maxStacks }, (_, i) => perStack * (i + 1));
+        suspicious = true;
+        suspiciousNote = 'auto-expanded from a single per-stack value — verify the real per-stack numbers';
+      } else if (valuesByStack.length !== maxStacks) {
+        maxStacks = Math.min(maxStacks, valuesByStack.length);
+        suspicious = true;
+        suspiciousNote = 'stack count was trimmed to match the values actually returned';
+      }
 
       return {
         name: c.name.trim(),
@@ -88,29 +103,45 @@ function sanitizeConditionals(rawConditionals) {
         valuesByStack,
         maxStacks,
         suspicious,
+        suspiciousNote,
       };
     });
 }
 
-async function callGroqJson({ systemPrompt, userPrompt }) {
-  const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: 'openai/gpt-oss-20b',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      temperature: 0,
-      reasoning_effort: 'low',
-      reasoning_format: 'hidden',
-      response_format: { type: 'json_object' },
-    }),
-  });
+async function callGroqJson({ systemPrompt, userPrompt, reasoningEffort = 'low', maxTokens = 2048 }) {
+  async function requestCompletion(useJsonObjectMode) {
+    return fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: 'openai/gpt-oss-20b',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0,
+        max_tokens: maxTokens,
+        reasoning_effort: reasoningEffort,
+        reasoning_format: 'hidden',
+        ...(useJsonObjectMode ? { response_format: { type: 'json_object' } } : {}),
+      }),
+    });
+  }
+
+  let groqResponse = await requestCompletion(true);
+
+  // Groq's strict json_object validation can reject an otherwise-fine
+  // generation (e.g. an empty completion when the token budget runs out
+  // on hidden reasoning before writing the answer). Retry once without
+  // enforced JSON mode — extractJsonObject()'s brace-matching fallback
+  // still catches most malformed-but-present output.
+  if (groqResponse.status === 400) {
+    console.log('Groq rejected json_object mode, retrying without it...');
+    groqResponse = await requestCompletion(false);
+  }
 
   if (!groqResponse.ok) {
     const errBody = await groqResponse.text();
@@ -119,6 +150,12 @@ async function callGroqJson({ systemPrompt, userPrompt }) {
   }
 
   const groqData = await groqResponse.json();
+  if (groqData.usage) {
+    console.log(
+      `Groq usage — prompt: ${groqData.usage.prompt_tokens}, completion: ${groqData.usage.completion_tokens}, total: ${groqData.usage.total_tokens}`
+    );
+  }
+
   const rawContent = groqData.choices?.[0]?.message?.content || '';
   const parsed = extractJsonObject(rawContent);
 
@@ -264,11 +301,11 @@ For each conditional effect found, determine:
 - appliesToAbility: which ability type it affects — must be exactly one of "BASIC", "SKILL", "ULT", "FUA", "DOT", or "ALL" if it affects all of the character's damage. Use "ALL" for Talent/passive-sourced DMG Boosts that aren't scoped to one specific attack type — do not invent other category names.
 - statType: what it boosts — one of "DMG_PERCENT", "CRIT_RATE", "CRIT_DMG", "ATK_PERCENT", "DEF_PEN", "RES_PEN", "VULNERABILITY", or "OTHER" if none of these fit
 - trigger: a short plain-English description of the condition
-- valuesByStack: an array of the bonus values in percent (e.g. 20 means +20%, not 0.2 and not 2000), indexed by stack count starting at 1 (e.g. [100, 200] means 1 stack = 100%, 2 stacks = 200%). If it's not stack-based but a single on/off condition, use a single-element array. The array length must exactly equal maxStacks. If the effect scales continuously (e.g. "+X% DMG per 1% Max HP lost, up to Y%") rather than in discrete stacks, represent only the minimum and maximum bound as a 2-element array with maxStacks 2, and say so in the trigger text — do not invent intermediate stack values.
+- valuesByStack: an array of the bonus values in percent (e.g. 20 means +20%, not 0.2 and not 2000), indexed by stack count starting at 1 (e.g. [100, 200] means 1 stack = 100%, 2 stacks = 200%). If it's not stack-based but a single on/off condition, use a single-element array. The array length must exactly equal maxStacks. IMPORTANT: descriptions phrased as "+X% per stack, up to N stacks" are still cumulative and must be expanded to the full N-element array (e.g. "25% per stack, up to 3 stacks" -> valuesByStack: [25, 50, 75], maxStacks: 3) — never respond with just the single per-stack number. If the effect scales continuously (e.g. "+X% DMG per 1% Max HP lost, up to Y%") rather than in discrete stacks, represent only the minimum and maximum bound as a 2-element array with maxStacks 2, and say so in the trigger text — do not invent intermediate stack values.
 - maxStacks: the highest stack count reachable, or 1 if not stack-based. Must equal valuesByStack.length.`;
 
   try {
-    const result = await callGroqJson({ systemPrompt, userPrompt });
+    const result = await callGroqJson({ systemPrompt, userPrompt, reasoningEffort: 'medium', maxTokens: 4096 });
 
     if (result.error) {
       res.status(result.status || 502).json(result);
@@ -282,7 +319,21 @@ For each conditional effect found, determine:
       return;
     }
 
-    res.json({ conditionals: sanitizeConditionals(parsed.conditionals) });
+    console.log(
+      `Extracted ${parsed.conditionals.length} raw conditional(s):`,
+      parsed.conditionals.map((c) => c && c.name).filter(Boolean)
+    );
+
+    const sanitized = sanitizeConditionals(parsed.conditionals);
+    const dropped = parsed.conditionals.length - sanitized.length;
+    if (dropped > 0) {
+      console.log(
+        `Dropped ${dropped} conditional(s) that didn't have a usable name/valuesByStack array. Raw items:`,
+        JSON.stringify(parsed.conditionals, null, 2)
+      );
+    }
+
+    res.json({ conditionals: sanitized });
   } catch (err) {
     console.log('Error calling Groq:', err);
     res.status(500).json({ error: 'Failed to extract conditionals' });
