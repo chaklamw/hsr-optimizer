@@ -54,6 +54,27 @@ const VALID_STAT_TYPES = new Set([
 ]);
 const PERCENT_SANITY_CEILING = 500;
 
+function coercePercentNumber(v) {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string') {
+    const num = Number(v.replace('%', '').trim());
+    if (Number.isFinite(num)) return num;
+  }
+  return null;
+}
+
+// The model sometimes writes the correct numbers into its free-text
+// trigger description while mangling the structured valuesByStack array
+// (e.g. concatenating "25, 50, 75" into a single 255075, or dropping most
+// digits into something like "05.614" for what should be [39.2, 47.6]).
+// Percentages mentioned directly in the trigger text are a decent recovery
+// source when the structured array clearly doesn't hold up.
+function extractPercentNumbersFromText(text) {
+  if (typeof text !== 'string') return [];
+  const matches = text.match(/\d+(?:\.\d+)?\s*%/g) || [];
+  return matches.map((m) => Number(m.replace('%', '').trim())).filter((n) => Number.isFinite(n));
+}
+
 function sanitizeConditionals(rawConditionals) {
   return rawConditionals
     .filter((c) => c && typeof c.name === 'string' && c.name.trim() && Array.isArray(c.valuesByStack))
@@ -68,13 +89,27 @@ function sanitizeConditionals(rawConditionals) {
       if (statType !== c.statType) suspicious = true;
 
       let valuesByStack = c.valuesByStack.map((v) => {
-        if (typeof v !== 'number' || !Number.isFinite(v) || Math.abs(v) > PERCENT_SANITY_CEILING) {
-          suspicious = true;
-          suspiciousNote = 'a value looked implausible and was zeroed out';
-          return 0;
-        }
-        return v;
+        const num = coercePercentNumber(v);
+        if (num === null || Math.abs(num) > PERCENT_SANITY_CEILING) return null;
+        return num;
       });
+
+      const triggerNumbers = extractPercentNumbersFromText(c.trigger);
+      const hasInvalidEntry = valuesByStack.some((v) => v === null);
+      // If the trigger text names more distinct percentages than the
+      // structured array has entries, the array is almost certainly
+      // incomplete/mangled rather than genuinely single-valued.
+      const structuredLooksIncomplete = triggerNumbers.length > 1 && triggerNumbers.length !== valuesByStack.length;
+
+      if ((hasInvalidEntry || structuredLooksIncomplete) && triggerNumbers.length > 0) {
+        valuesByStack = triggerNumbers;
+        suspicious = true;
+        suspiciousNote = 'structured values from the model looked wrong — recovered from the trigger text instead, verify manually';
+      } else if (hasInvalidEntry) {
+        valuesByStack = valuesByStack.map((v) => v ?? 0);
+        suspicious = true;
+        suspiciousNote = 'a value looked implausible and was zeroed out';
+      }
 
       const requestedMaxStacks = Number(c.maxStacks);
       let maxStacks = Number.isFinite(requestedMaxStacks) ? Math.max(1, requestedMaxStacks) : valuesByStack.length;
@@ -88,11 +123,11 @@ function sanitizeConditionals(rawConditionals) {
         const perStack = valuesByStack[0];
         valuesByStack = Array.from({ length: maxStacks }, (_, i) => perStack * (i + 1));
         suspicious = true;
-        suspiciousNote = 'auto-expanded from a single per-stack value — verify the real per-stack numbers';
+        suspiciousNote = suspiciousNote || 'auto-expanded from a single per-stack value — verify the real per-stack numbers';
       } else if (valuesByStack.length !== maxStacks) {
         maxStacks = Math.min(maxStacks, valuesByStack.length);
         suspicious = true;
-        suspiciousNote = 'stack count was trimmed to match the values actually returned';
+        suspiciousNote = suspiciousNote || 'stack count was trimmed to match the values actually returned';
       }
 
       return {
@@ -321,16 +356,13 @@ For each conditional effect found, determine:
 
     console.log(
       `Extracted ${parsed.conditionals.length} raw conditional(s):`,
-      parsed.conditionals.map((c) => c && c.name).filter(Boolean)
+      JSON.stringify(parsed.conditionals, null, 2)
     );
 
     const sanitized = sanitizeConditionals(parsed.conditionals);
-    const dropped = parsed.conditionals.length - sanitized.length;
-    if (dropped > 0) {
-      console.log(
-        `Dropped ${dropped} conditional(s) that didn't have a usable name/valuesByStack array. Raw items:`,
-        JSON.stringify(parsed.conditionals, null, 2)
-      );
+    const flaggedSuspicious = sanitized.filter((c) => c.suspicious);
+    if (flaggedSuspicious.length > 0) {
+      console.log('Sanitizer flagged as suspicious:', flaggedSuspicious.map((c) => `${c.name} (${c.suspiciousNote})`));
     }
 
     res.json({ conditionals: sanitized });
