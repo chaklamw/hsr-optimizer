@@ -707,6 +707,7 @@ export default function ProfilePage() {
   const [calcDefShred, setCalcDefShred] = useState(0);
   const [calcScalingStat, setCalcScalingStat] = useState('');
   const [calcScalingStatus, setCalcScalingStatus] = useState('idle');
+  const [calcScalingError, setCalcScalingError] = useState('');
   const [calcNonStatValue, setCalcNonStatValue] = useState(0);
   const [calcDamageType, setCalcDamageType] = useState(DamageType.STANDARD);
   const [calcPunchlineValue, setCalcPunchlineValue] = useState(0);
@@ -880,6 +881,7 @@ export default function ProfilePage() {
     }
 
     setCalcScalingStatus('loading');
+    setCalcScalingError('');
     try {
       const { damageType, scalingStat } = await interpretSkill(resolvedDesc);
       setCalcDamageType(damageType === 'ELATION' ? DamageType.ELATION : DamageType.STANDARD);
@@ -888,6 +890,7 @@ export default function ProfilePage() {
     } catch (err) {
       console.error('Skill scaling detection failed:', err);
       setCalcScalingStatus('error');
+      setCalcScalingError(err.message || 'Failed to reach the detection service.');
     }
   }
 
@@ -1745,8 +1748,8 @@ export default function ProfilePage() {
                               )}
                               {calcScalingStatus === 'error' && (
                                 <p className="compare-ocr-note compare-ocr-note-warn">
-                                  Couldn't reach the detection service — pick the scaling stat manually
-                                  (defaults to standard damage).
+                                  {calcScalingError || "Couldn't reach the detection service"} — pick the
+                                  scaling stat manually (defaults to standard damage).
                                 </p>
                               )}
 

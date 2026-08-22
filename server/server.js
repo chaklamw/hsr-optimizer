@@ -181,6 +181,29 @@ async function callGroqJson({ systemPrompt, userPrompt, reasoningEffort = 'low',
   if (!groqResponse.ok) {
     const errBody = await groqResponse.text();
     console.log('Groq responded with status:', groqResponse.status, errBody);
+
+    if (groqResponse.status === 429) {
+      let retryAfterSeconds = null;
+
+      const headerValue = groqResponse.headers.get('retry-after');
+      if (headerValue && Number.isFinite(Number(headerValue))) {
+        retryAfterSeconds = Number(headerValue);
+      }
+      if (retryAfterSeconds === null) {
+        const match = errBody.match(/try again in ([\d.]+)s/i);
+        if (match) retryAfterSeconds = Number(match[1]);
+      }
+
+      return {
+        error:
+          retryAfterSeconds !== null
+            ? `Token limit exceeded — please wait ${Math.ceil(retryAfterSeconds)}s and try again.`
+            : 'Token limit exceeded — please wait a bit and try again.',
+        status: 429,
+        retryAfterSeconds,
+      };
+    }
+
     return { error: 'Failed to fetch from Groq', status: groqResponse.status };
   }
 
