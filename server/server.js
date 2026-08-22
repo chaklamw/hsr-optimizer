@@ -317,6 +317,11 @@ app.post('/api/extract-conditionals', async (req, res) => {
     return;
   }
 
+  console.log(
+    `Received ${abilities.length} ability/abilities for ${characterName}:`,
+    abilities.map((a) => `[${a.type}] ${a.description.slice(0, 80)}${a.description.length > 80 ? '...' : ''}`)
+  );
+
   const abilitiesText = abilities
     .map((a) => `[${a.type}] ${a.description}`)
     .join('\n\n');

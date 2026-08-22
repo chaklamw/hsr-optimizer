@@ -460,6 +460,48 @@ const CONDITIONAL_STAT_TYPES = [
 ];
 const CONDITIONAL_ABILITY_TARGETS = ['ALL', 'BASIC', 'SKILL', 'ULT', 'FUA', 'DOT'];
 
+const STAT_TYPE_DESCRIPTIONS = {
+  DMG_PERCENT: 'Increases DMG dealt',
+  RES_PEN: "Reduces the enemy's elemental RES",
+  DEF_PEN: "Reduces the enemy's effective DEF",
+  CRIT_RATE: 'Increases CRIT Rate',
+  CRIT_DMG: 'Increases CRIT DMG',
+  ATK_PERCENT: 'Increases ATK (only matters if the skill scales off ATK)',
+  VULNERABILITY: 'Increases DMG the target takes from all sources',
+  OTHER: "Doesn't map to a stat this calculator currently applies to damage",
+};
+
+function ConditionalHelpTooltip({ c }) {
+  return (
+    <span className="conditional-help-wrap">
+      <span className="conditional-help-icon">?</span>
+      <div className="conditional-tooltip">
+        <p className="conditional-tooltip-trigger">{c.trigger || '(no description provided)'}</p>
+        <p className="conditional-tooltip-effect">
+          <strong>Effect:</strong> {STAT_TYPE_DESCRIPTIONS[c.statType] || c.statType}
+        </p>
+        <p className="conditional-tooltip-applies">
+          <strong>Applies to:</strong>{' '}
+          {c.appliesToAbility === 'ALL' ? "all of this character's abilities" : c.appliesToAbility}
+        </p>
+        {c.valuesByStack.length > 1 ? (
+          <ul className="conditional-tooltip-stacks">
+            {c.valuesByStack.map((v, i) => (
+              <li key={i}>
+                Stack {i + 1}: +{v}%
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="conditional-tooltip-value">
+            <strong>Value:</strong> +{c.valuesByStack[0] ?? 0}%
+          </p>
+        )}
+      </div>
+    </span>
+  );
+}
+
 // StarRailRes lists some non-damage entries alongside real attacks — e.g.
 // Archer's "Skill: End", a state-exit toggle with no scaling values, but
 // also heal/shield/buff/summon skills that DO carry nonzero params (heal
@@ -802,6 +844,13 @@ export default function ProfilePage() {
       setAiConditionalStatus('error');
       setAiConditionalError(err.message || 'Failed to reach the extraction service.');
     }
+  }
+
+  function handleCalcLevelChange(level) {
+    // Level only changes the skill's numeric param values, never its
+    // scaling stat or damage type — no need to re-run detection against
+    // Groq for something level-invariant.
+    setCalcSkillLevel(level);
   }
 
   async function handleCalcSkillChange(skillId, level) {
@@ -1670,7 +1719,7 @@ export default function ProfilePage() {
                                 min="1"
                                 max={skill.max_level}
                                 value={calcSkillLevel}
-                                onChange={(e) => handleCalcSkillChange(calcSkillId, Number(e.target.value))}
+                                onChange={(e) => handleCalcLevelChange(Number(e.target.value))}
                               />
                             </label>
                           </div>
@@ -1759,7 +1808,8 @@ export default function ProfilePage() {
                             <div key={c.name} className="compare-form-row ai-conditional-row">
                               <div>
                                 <span className="calc-inline-label">
-                                  {c.name} <span className="conditional-stat-type-tag">{c.statType}</span>
+                                  {c.name} <ConditionalHelpTooltip c={c} />{' '}
+                                  <span className="conditional-stat-type-tag">{c.statType}</span>
                                 </span>
                                 <p className="compare-ocr-note ai-disclaimer">
                                   ⚠️ AI-extracted — {c.trigger} — verify against current patch
@@ -1792,7 +1842,9 @@ export default function ProfilePage() {
                           {matchedManualConditionals.map((c) => (
                             <div key={c.name} className="compare-form-row ai-conditional-row">
                               <div>
-                                <span className="calc-inline-label">{c.name}</span>
+                                <span className="calc-inline-label">
+                                  {c.name} <ConditionalHelpTooltip c={c} />
+                                </span>
                                 <p className="compare-ocr-note">
                                   Manually added — {c.statType} — {c.appliesToAbility}
                                 </p>

@@ -1027,6 +1027,85 @@ h1 {
   vertical-align: middle;
 }
 
+.conditional-help-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text-dim);
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 50%;
+  cursor: help;
+  vertical-align: middle;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.conditional-help-wrap:hover .conditional-help-icon {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.conditional-help-wrap {
+  position: relative;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.conditional-tooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: min(280px, calc(100vw - 64px));
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  box-shadow: 0 12px 28px -12px rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 20;
+}
+
+.conditional-help-wrap:hover .conditional-tooltip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.conditional-tooltip-trigger {
+  margin: 0;
+  color: var(--text);
+}
+
+.conditional-tooltip-effect,
+.conditional-tooltip-applies,
+.conditional-tooltip-value {
+  margin: 8px 0 0;
+}
+
+.conditional-tooltip strong {
+  color: var(--text);
+}
+
+.conditional-tooltip-stacks {
+  list-style: disc;
+  margin: 8px 0 0;
+  padding-left: 16px;
+}
+
+.conditional-tooltip-stacks li {
+  margin-top: 2px;
+}
+
 .manual-conditional-form {
   display: flex;
   flex-wrap: wrap;
