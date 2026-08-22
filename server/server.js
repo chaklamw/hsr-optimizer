@@ -340,7 +340,7 @@ For each conditional effect found, determine:
 - maxStacks: the highest stack count reachable, or 1 if not stack-based. Must equal valuesByStack.length.`;
 
   try {
-    const result = await callGroqJson({ systemPrompt, userPrompt, reasoningEffort: 'medium', maxTokens: 4096 });
+    const result = await callGroqJson({ systemPrompt, userPrompt, reasoningEffort: 'low', maxTokens: 4096 });
 
     if (result.error) {
       res.status(result.status || 502).json(result);

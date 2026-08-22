@@ -764,6 +764,26 @@ export default function ProfilePage() {
       }))
       .filter((a) => a.description);
 
+    // Light cone passives (e.g. a signature LC's DEF Ignore or DMG Boost)
+    // are just as damage-relevant as the character's own kit but live in a
+    // completely separate data source (lightConeRanks, resolved at the
+    // equipped superimposition rank) — include it so effects like these
+    // don't require manually re-entering for every character/LC pairing.
+    const equipment = activeCharacter.equipment;
+    if (equipment) {
+      const rankData = lightConeRanks[equipment.tid];
+      const lcName = lightConeNames[equipment.tid]?.name || 'Light Cone';
+      const lcDesc = rankData
+        ? formatLightConeDesc(rankData.desc, rankData.params?.[equipment.rank - 1]) || rankData.desc || ''
+        : '';
+      if (lcDesc && /dmg/i.test(lcDesc)) {
+        abilities.push({
+          type: 'Light Cone Passive',
+          description: `${lcName} (Superimposition ${equipment.rank}): ${lcDesc}`,
+        });
+      }
+    }
+
     if (abilities.length === 0) {
       setAiConditionalStatus('error');
       setAiConditionalError('No resolved ability descriptions found for this character.');
