@@ -130,11 +130,13 @@ function sanitizeConditionals(rawConditionals) {
         suspiciousNote = suspiciousNote || 'stack count was trimmed to match the values actually returned';
       }
 
+      const trigger = typeof c.trigger === 'string' ? c.trigger : '';
+
       return {
         name: c.name.trim(),
         appliesToAbility,
         statType,
-        trigger: typeof c.trigger === 'string' ? c.trigger : '',
+        trigger,
         valuesByStack,
         maxStacks,
         suspicious,
@@ -342,7 +344,7 @@ app.post('/api/extract-conditionals', async (req, res) => {
 
   console.log(
     `Received ${abilities.length} ability/abilities for ${characterName}:`,
-    abilities.map((a) => `[${a.type}] ${a.description.slice(0, 80)}${a.description.length > 80 ? '...' : ''}`)
+    abilities.map((a) => `[${a.type}] ${a.description.slice(0, 400)}${a.description.length > 400 ? '...' : ''}`)
   );
 
   const abilitiesText = abilities
@@ -358,7 +360,7 @@ If no qualifying conditional effects are found, respond with {"conditionals": []
 Ability descriptions:
 ${abilitiesText}
 
-Find any effects where the character's DMG (or a specific ability's DMG) increases conditionally — for example, stacking bonuses from repeated casts, threshold-based bonuses (e.g. "when HP is above/below X%"), or state-based bonuses. Ignore effects that are just flat, always-on stat increases with no condition (e.g. a trace that always gives +20% CRIT DMG with no trigger, or a summon effect that unconditionally debuffs enemies) — only extract effects with an actual trigger or stacking condition.
+Find any effects where the character's DMG (or a specific ability's DMG) increases conditionally — for example, stacking bonuses from repeated casts, threshold-based bonuses (e.g. "when HP is above/below X%"), or state-based bonuses. Ignore effects that are just flat, always-on stat increases with no condition (e.g. a trace that always gives +20% CRIT DMG with no trigger, or a summon effect that unconditionally debuffs enemies) — only extract effects with an actual trigger or stacking condition. This applies to [Relic Set (4pc)] entries too: a 4pc bonus often bundles a flat baseline together with a genuinely conditional bonus in the same sentence (e.g. "+8% CRIT Rate. When SPD is below 95 at the start of an action, additionally increases CRIT Rate by 12%") — only extract the conditional portion (the +12% tied to the SPD trigger), not the flat +8% baseline, since that baseline is already applied elsewhere and re-extracting it would double-count it.
 
 For each conditional effect found, determine:
 - appliesToAbility: which ability type it affects — must be exactly one of "BASIC", "SKILL", "ULT", "FUA", "DOT", or "ALL" if it affects all of the character's damage. Use "ALL" for Talent/passive-sourced DMG Boosts that aren't scoped to one specific attack type — do not invent other category names.

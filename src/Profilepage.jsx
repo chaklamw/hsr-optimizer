@@ -516,6 +516,16 @@ function ConditionalHelpTooltip({ c }) {
 // with no #1[i]%-style placeholder, so they carry no numeric params at
 // all — resolving via params first, falling back to the raw desc, keeps
 // those from being excluded just for lacking scaling values.
+// Broader than a literal "DMG" check — a stat-boosting effect might only
+// mention CRIT Rate, RES, DEF, or ATK without ever using the word "DMG"
+// itself (e.g. "gains CRIT Rate when SPD is below 95"), and those are just
+// as damage-relevant as anything with "DMG" in it. Used everywhere ability
+// text gets filtered before being sent for conditional extraction.
+function isDamageRelevantText(text) {
+  if (!text) return false;
+  return /\b(dmg|crit|res|def|atk)\b|vulnerab/i.test(text);
+}
+
 function mentionsDamage(skill) {
   if (!skill) return false;
   const firstLevelParams = Array.isArray(skill.params) ? skill.params[0] : null;
@@ -524,7 +534,7 @@ function mentionsDamage(skill) {
       ? formatLightConeDesc(skill.desc, firstLevelParams)
       : null) || skill.desc || '';
   if (!resolvedDesc) return false;
-  return /dmg/i.test(resolvedDesc);
+  return isDamageRelevantText(resolvedDesc);
 }
 
 // Stricter than mentionsDamage: requires an active "deal(s) ... DMG"
@@ -798,6 +808,7 @@ export default function ProfilePage() {
     const characterName = characterNames[activeCharacter.avatarId]?.name || 'Unknown';
     const skillIds = characterNames[activeCharacter.avatarId]?.skills || [];
 
+    const seenDescriptions = new Set();
     const abilities = skillIds
       .map((id) => characterSkills[id])
       .filter(mentionsDamage)
@@ -805,7 +816,18 @@ export default function ProfilePage() {
         type: s.type_text || 'Ability',
         description: formatLightConeDesc(s.desc, s.params[s.params.length - 1]) || s.desc,
       }))
-      .filter((a) => a.description);
+      .filter((a) => a.description)
+      // Characters with multiple skill IDs sharing a name (e.g. Castorice's
+      // escalating-multiplier variants, already handled separately by
+      // getEscalatingMultipliers() for the multiplier selector) otherwise
+      // send byte-identical description text multiple times, wasting
+      // prompt budget on redundant content instead of leaving that room
+      // for effects that are actually distinct.
+      .filter((a) => {
+        if (seenDescriptions.has(a.description)) return false;
+        seenDescriptions.add(a.description);
+        return true;
+      });
 
     // Light cone passives (e.g. a signature LC's DEF Ignore or DMG Boost)
     // are just as damage-relevant as the character's own kit but live in a
@@ -819,13 +841,40 @@ export default function ProfilePage() {
       const lcDesc = rankData
         ? formatLightConeDesc(rankData.desc, rankData.params?.[equipment.rank - 1]) || rankData.desc || ''
         : '';
-      if (lcDesc && /dmg/i.test(lcDesc)) {
+      if (lcDesc && isDamageRelevantText(lcDesc)) {
         abilities.push({
           type: 'Light Cone Passive',
           description: `${lcName} (Superimposition ${equipment.rank}): ${lcDesc}`,
         });
       }
     }
+
+    // 4pc relic set bonuses can bundle a genuinely conditional effect
+    // alongside a flat baseline (e.g. Bone Collection's Serene Demesne:
+    // always +X% CRIT Rate, PLUS +Y% more when SPD < 95 at combat start).
+    // The flat baseline is already applied numerically via
+    // relicSets[setID].properties in computeFinalStats — this is only for
+    // catching the extra conditional portion that numeric properties data
+    // never captures. 2pc bonuses are essentially always fully flat/
+    // unconditional in HSR and are already fully covered by properties[0],
+    // so there's nothing legitimate to extract there — sending that text
+    // would just risk the model re-describing an already-applied bonus as
+    // if it needed a separate toggle, double-counting it.
+    const setCounts = {};
+    (activeCharacter.relicList || []).forEach((relic) => {
+      const setID = relic._flat?.setID;
+      if (setID != null) setCounts[setID] = (setCounts[setID] || 0) + 1;
+    });
+    Object.entries(setCounts).forEach(([setID, count]) => {
+      const set = relicSets[setID];
+      if (!set) return;
+      if (count >= 4 && set.desc[1] && isDamageRelevantText(set.desc[1])) {
+        abilities.push({
+          type: 'Relic Set (4pc)',
+          description: `${set.name} (4pc): ${set.desc[1]}`,
+        });
+      }
+    });
 
     if (abilities.length === 0) {
       setAiConditionalStatus('error');
