@@ -1,0 +1,70 @@
+{
+  "7b876dd827e5ba2d2214c99afe3b6136d3a6f7fdf240711a761274ebf6b4c12b": {
+    "characterName": "Yao Guang",
+    "conditionals": [
+      {
+        "name": "Great Boon Damage Bonus",
+        "appliesToAbility": "ALL",
+        "statType": "DMG_PERCENT",
+        "trigger": "After an ally target uses an attack while Yao Guang holds Certified Banger; if that attack consumes Skill Points, triggers an additional Great Boon",
+        "valuesByStack": [
+          25,
+          25
+        ],
+        "maxStacks": 2,
+        "suspicious": false,
+        "suspiciousNote": ""
+      },
+      {
+        "name": "Woe's Whisper Vulnerability",
+        "appliesToAbility": "ALL",
+        "statType": "VULNERABILITY",
+        "trigger": "always active while Woe's Whisper is active",
+        "valuesByStack": [
+          16
+        ],
+        "maxStacks": 1,
+        "suspicious": false,
+        "suspiciousNote": ""
+      },
+      {
+        "name": "Great Fortune CRIT Rate Boost",
+        "appliesToAbility": "ALL",
+        "statType": "CRIT_RATE",
+        "trigger": "While wearer holds Great Fortune (activated by entering combat or using Ultimate on an ally, lasts 3 turns)",
+        "valuesByStack": [
+          10
+        ],
+        "maxStacks": 1,
+        "suspicious": false,
+        "suspiciousNote": ""
+      },
+      {
+        "name": "Great Fortune CRIT DMG Boost",
+        "appliesToAbility": "ALL",
+        "statType": "CRIT_DMG",
+        "trigger": "While wearer holds Great Fortune (activated by entering combat or using Ultimate on an ally, lasts 3 turns)",
+        "valuesByStack": [
+          30
+        ],
+        "maxStacks": 1,
+        "suspicious": false,
+        "suspiciousNote": ""
+      },
+      {
+        "name": "SPD-based Crit Rate Boost",
+        "appliesToAbility": "ALL",
+        "statType": "CRIT_RATE",
+        "trigger": "Tier 1: SPD >= 120 -> +10% CRIT Rate. Tier 2 (stricter): SPD >= 160 -> +18% CRIT Rate",
+        "valuesByStack": [
+          10,
+          18
+        ],
+        "maxStacks": 2,
+        "suspicious": false,
+        "suspiciousNote": ""
+      }
+    ],
+    "extractedAt": "2026-08-23T06:12:46.793Z"
+  }
+}

@@ -422,15 +422,15 @@ async function interpretSkill(description) {
   return { damageType: data.damageType, scalingStat: data.scalingStat };
 }
 
-async function extractConditionals(characterName, abilities) {
+async function extractConditionals(characterName, abilities, forceRefresh = false) {
   const res = await fetch('http://localhost:3001/api/extract-conditionals', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ characterName, abilities }),
+    body: JSON.stringify({ characterName, abilities, forceRefresh }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `Server responded ${res.status}`);
-  return data.conditionals;
+  return { conditionals: data.conditionals, cached: !!data.cached, extractedAt: data.extractedAt };
 }
 
 // Maps the ability type text StarRailRes uses to the same enum the
@@ -739,6 +739,7 @@ export default function ProfilePage() {
   const [aiConditionalStatus, setAiConditionalStatus] = useState('idle');
   const [aiConditionalError, setAiConditionalError] = useState('');
   const [aiConditionalStacks, setAiConditionalStacks] = useState({});
+  const [aiConditionalCached, setAiConditionalCached] = useState(false);
   const cardRefs = useRef({});
   const trackRef = useRef(null);
 
@@ -804,7 +805,7 @@ export default function ProfilePage() {
     }
   }
 
-  async function handleDetectAiConditionals() {
+  async function handleDetectAiConditionals(forceRefresh = false) {
     const characterName = characterNames[activeCharacter.avatarId]?.name || 'Unknown';
     const skillIds = characterNames[activeCharacter.avatarId]?.skills || [];
 
@@ -885,9 +886,10 @@ export default function ProfilePage() {
     setAiConditionalStatus('loading');
     setAiConditionalError('');
     try {
-      const conditionals = await extractConditionals(characterName, abilities);
+      const { conditionals, cached } = await extractConditionals(characterName, abilities, forceRefresh);
       setAiConditionals(conditionals);
       setAiConditionalStacks({});
+      setAiConditionalCached(cached);
       setAiConditionalStatus(conditionals.length === 0 ? 'empty' : 'done');
     } catch (err) {
       console.error('AI conditional detection failed:', err);
@@ -1696,16 +1698,27 @@ export default function ProfilePage() {
                         <button
                           type="button"
                           className="compare-weights-toggle"
-                          onClick={handleDetectAiConditionals}
+                          onClick={() => handleDetectAiConditionals(false)}
                         >
                           {aiConditionalStatus === 'loading' ? 'Detecting...' : 'Detect conditional bonuses (AI)'}
                         </button>
+                        {(aiConditionalStatus === 'done' || aiConditionalStatus === 'empty') && (
+                          <button
+                            type="button"
+                            className="compare-weights-toggle"
+                            onClick={() => handleDetectAiConditionals(true)}
+                            title="Bypass the cache and re-run extraction — use this if a character was recently reworked"
+                          >
+                            Re-detect (skip cache)
+                          </button>
+                        )}
                       </div>
 
                       {aiConditionalStatus === 'done' && (
                         <p className="compare-ocr-note ai-disclaimer">
                           ⚠️ These bonuses were extracted by AI from ability text and haven't been manually
                           verified. Double-check against current in-game tooltips before trusting the numbers.
+                          {aiConditionalCached && ' (Loaded from a previous extraction — click "Re-detect" if this kit was recently reworked.)'}
                         </p>
                       )}
 
