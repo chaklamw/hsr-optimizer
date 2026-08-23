@@ -51,6 +51,73 @@ function hashConditionalsInput(characterName, abilities) {
   return hash.digest('hex');
 }
 
+// Light Cone Passives and Relic Set bonuses are equipment, not kit — the
+// exact same set or LC can be worn by any character, and its conditional
+// effects don't change based on who's wearing it (only whether the wearer
+// meets the trigger, which is applied later when the calculator resolves
+// stacks, not at extraction time). Caching these keyed on the equipment's
+// own text (rather than folded into each character's kit hash) means the
+// first character who's scanned wearing a given set/LC pays the Groq cost,
+// and every character after that — on any future character, not just this
+// one — gets it for free.
+const EQUIPMENT_CACHE_PATH = path.join(__dirname, 'equipment-conditionals-cache.json');
+const SHAREABLE_EQUIPMENT_TYPES = ['Light Cone Passive'];
+
+function isShareableEquipment(abilityType) {
+  return SHAREABLE_EQUIPMENT_TYPES.includes(abilityType) || abilityType.startsWith('Relic Set');
+}
+
+function loadEquipmentCache() {
+  try {
+    return JSON.parse(fs.readFileSync(EQUIPMENT_CACHE_PATH, 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+function saveEquipmentCache(cache) {
+  try {
+    fs.writeFileSync(EQUIPMENT_CACHE_PATH, JSON.stringify(cache, null, 2));
+  } catch (err) {
+    console.log('Failed to write equipment cache:', err.message);
+  }
+}
+
+function hashEquipmentText(type, description) {
+  const hash = crypto.createHash('sha256');
+  hash.update(type + '\u0000' + description);
+  return hash.digest('hex');
+}
+
+// A character cache entry stores only its OWN kit conditionals plus
+// references (hashes) to whichever equipment pieces it uses — never a
+// private copy of the equipment's conditionals themselves. Resolving those
+// refs live against the current equipment cache means a later correction
+// to one relic set's or light cone's extraction automatically applies to
+// every character that references it, with no per-character cache
+// invalidation needed. Falls back to the old shape (`entry.conditionals`,
+// a fully merged list with no refs) for entries written before this
+// change, so the existing cache file doesn't need to be wiped.
+function resolveCachedCharacterEntry(entry) {
+  if (!Array.isArray(entry.equipmentRefs)) {
+    return entry.conditionals || [];
+  }
+
+  const equipmentCache = loadEquipmentCache();
+  const equipmentConditionals = [];
+
+  entry.equipmentRefs.forEach((ref) => {
+    const cached = equipmentCache[ref.key];
+    if (!cached) {
+      console.log(`Equipment ref ${ref.key.slice(0, 8)} (${ref.sourceType}) missing from equipment cache — skipping`);
+      return;
+    }
+    equipmentConditionals.push(...cached.conditionals);
+  });
+
+  return [...(entry.characterConditionals || []), ...equipmentConditionals];
+}
+
 // This account's Groq tier caps requests at a fixed tokens-per-minute
 // budget, and Groq reserves the FULL max_tokens value against that budget
 // up front — not just what the model actually ends up using. A fixed
@@ -436,8 +503,10 @@ app.post('/api/extract-conditionals', async (req, res) => {
   const cache = loadConditionalsCache();
 
   if (!forceRefresh && cache[cacheKey]) {
+    const entry = cache[cacheKey];
+    const resolved = resolveCachedCharacterEntry(entry);
     console.log(`Conditionals cache hit for ${characterName} (${cacheKey.slice(0, 8)})`);
-    res.json({ conditionals: cache[cacheKey].conditionals, cached: true, extractedAt: cache[cacheKey].extractedAt });
+    res.json({ conditionals: resolved, cached: true, extractedAt: entry.extractedAt });
     return;
   }
 
@@ -471,8 +540,11 @@ For each conditional effect found, determine:
 - maxStacks: the highest stack count reachable, or 1 if not stack-based. Must equal valuesByStack.length.`;
 
   try {
-    const allConditionals = [];
+    const characterConditionals = [];
+    const equipmentRefs = [];
     let failedCount = 0;
+    const equipmentCache = loadEquipmentCache();
+    let equipmentCacheDirty = false;
 
     // One focused call per ability instead of one mega-call covering the
     // whole kit. A combined prompt forces the model to hold 5-7 abilities
@@ -488,6 +560,23 @@ For each conditional effect found, determine:
     // reserved against the TPM budget at a time.
     for (let i = 0; i < abilities.length; i++) {
       const ability = abilities[i];
+      const shareable = isShareableEquipment(ability.type);
+      const equipmentKey = shareable ? hashEquipmentText(ability.type, ability.description) : null;
+
+      // forceRefresh bypasses BOTH caches for this request — "Re-detect"
+      // should mean "regenerate everything from scratch," not "regenerate
+      // this character's kit but still trust whatever this piece of gear
+      // was cached as before." Since the equipment cache is shared, a
+      // forced re-extraction here also benefits every other character
+      // that references this same set/LC going forward.
+      if (!forceRefresh && shareable && equipmentCache[equipmentKey]) {
+        const cachedConditionals = equipmentCache[equipmentKey].conditionals;
+        console.log(
+          `Equipment cache hit for [${ability.type}] (${equipmentKey.slice(0, 8)}) — reused ${cachedConditionals.length} conditional(s), skipped Groq call`
+        );
+        equipmentRefs.push({ key: equipmentKey, sourceType: ability.type });
+        continue;
+      }
 
       if (i > 0) {
         // Small pacing gap between calls — doesn't guarantee staying under
@@ -497,7 +586,16 @@ For each conditional effect found, determine:
         await sleep(600);
       }
 
-      const conditionalUserPrompt = `Character: "${characterName}"
+      // Equipment prompts deliberately omit the character's name — a
+      // relic set or light cone's conditional effects don't depend on who
+      // equips it (only "the wearer," generically), and keeping the
+      // character out of the prompt keeps the extraction reusable across
+      // every future character who wears the same piece, not just this one.
+      const conditionalUserPrompt = shareable
+        ? `Ability: [${ability.type}] ${ability.description}
+
+${conditionalExtractionRules}`
+        : `Character: "${characterName}"
 
 Ability: [${ability.type}] ${ability.description}
 
@@ -527,7 +625,28 @@ ${conditionalExtractionRules}`;
         console.log(`[${ability.type}] extracted ${parsed.conditionals.length}:`, JSON.stringify(parsed.conditionals, null, 2));
       }
 
-      allConditionals.push(...parsed.conditionals);
+      if (shareable) {
+        // Sanitize before caching, not after merging with the rest of the
+        // kit — an equipment cache entry needs to be self-contained and
+        // trustworthy on its own, since a future character will pull it
+        // straight out of the cache without ever re-running it through
+        // sanitizeConditionals() (only the character's own raw entries get
+        // swept up in the final sanitize pass below).
+        const sanitizedEquipment = sanitizeConditionals(parsed.conditionals);
+        equipmentCache[equipmentKey] = {
+          sourceType: ability.type,
+          conditionals: sanitizedEquipment,
+          extractedAt: new Date().toISOString(),
+        };
+        equipmentCacheDirty = true;
+        equipmentRefs.push({ key: equipmentKey, sourceType: ability.type });
+      } else {
+        characterConditionals.push(...parsed.conditionals);
+      }
+    }
+
+    if (equipmentCacheDirty) {
+      saveEquipmentCache(equipmentCache);
     }
 
     if (failedCount === abilities.length) {
@@ -541,19 +660,29 @@ ${conditionalExtractionRules}`;
       console.log(`${failedCount}/${abilities.length} ability calls failed for ${characterName} — results below are partial.`);
     }
 
-    console.log(`Extracted ${allConditionals.length} raw conditional(s) total across ${abilities.length} abilities for ${characterName}`);
+    // Sanitize only the character's own kit output here — equipment
+    // entries were already sanitized at the point they were cached, and
+    // re-sanitizing on every read (rather than once, at write time) would
+    // be wasted work every single time any character with that gear is
+    // scanned or has a cache hit resolved.
+    const sanitizedCharacterConditionals = sanitizeConditionals(characterConditionals);
+    const resolvedEquipmentConditionals = equipmentRefs.flatMap(
+      (ref) => equipmentCache[ref.key]?.conditionals || []
+    );
+    const combined = [...sanitizedCharacterConditionals, ...resolvedEquipmentConditionals];
 
-    const sanitized = sanitizeConditionals(allConditionals);
-    const flaggedSuspicious = sanitized.filter((c) => c.suspicious);
+    console.log(`Extracted ${combined.length} total conditional(s) across ${abilities.length} abilities for ${characterName}`);
+
+    const flaggedSuspicious = sanitizedCharacterConditionals.filter((c) => c.suspicious);
     if (flaggedSuspicious.length > 0) {
       console.log('Sanitizer flagged as suspicious:', flaggedSuspicious.map((c) => `${c.name} (${c.suspiciousNote})`));
     }
 
     const extractedAt = new Date().toISOString();
-    cache[cacheKey] = { characterName, conditionals: sanitized, extractedAt };
+    cache[cacheKey] = { characterName, characterConditionals: sanitizedCharacterConditionals, equipmentRefs, extractedAt };
     saveConditionalsCache(cache);
 
-    res.json({ conditionals: sanitized, cached: false, extractedAt });
+    res.json({ conditionals: combined, cached: false, extractedAt });
   } catch (err) {
     console.log('Error calling Groq:', err);
     res.status(500).json({ error: 'Failed to extract conditionals' });

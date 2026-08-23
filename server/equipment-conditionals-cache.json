@@ -1,0 +1,51 @@
+{
+  "86df2c0787759bea7694f0d75ed689d1fa5968a3e787f0f4915fcef6ca4a04c1": {
+    "sourceType": "Light Cone Passive",
+    "conditionals": [
+      {
+        "name": "Great Fortune CRIT Rate",
+        "appliesToAbility": "ALL",
+        "statType": "CRIT_RATE",
+        "trigger": "While wearer holds Great Fortune (3 turns)",
+        "valuesByStack": [
+          10
+        ],
+        "maxStacks": 1,
+        "suspicious": false,
+        "suspiciousNote": ""
+      },
+      {
+        "name": "Great Fortune CRIT DMG",
+        "appliesToAbility": "ALL",
+        "statType": "CRIT_DMG",
+        "trigger": "While wearer holds Great Fortune (3 turns)",
+        "valuesByStack": [
+          30
+        ],
+        "maxStacks": 1,
+        "suspicious": false,
+        "suspiciousNote": ""
+      }
+    ],
+    "extractedAt": "2026-08-23T06:26:05.036Z"
+  },
+  "3ed410fe19601ec6d513777c1f78bffd45df77ea3274c0285096e53eff2061d8": {
+    "sourceType": "Relic Set (4pc)",
+    "conditionals": [
+      {
+        "name": "SPD-based Crit Rate Boost",
+        "appliesToAbility": "ALL",
+        "statType": "CRIT_RATE",
+        "trigger": "Tier 1: SPD >= 120 -> +10% CRIT Rate. Tier 2 (stricter): SPD >= 160 -> +18% CRIT Rate",
+        "valuesByStack": [
+          10,
+          18
+        ],
+        "maxStacks": 2,
+        "suspicious": false,
+        "suspiciousNote": ""
+      }
+    ],
+    "extractedAt": "2026-08-23T06:26:17.622Z"
+  }
+}
