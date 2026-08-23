@@ -850,17 +850,18 @@ export default function ProfilePage() {
       }
     }
 
-    // 4pc relic set bonuses can bundle a genuinely conditional effect
-    // alongside a flat baseline (e.g. Bone Collection's Serene Demesne:
-    // always +X% CRIT Rate, PLUS +Y% more when SPD < 95 at combat start).
-    // The flat baseline is already applied numerically via
-    // relicSets[setID].properties in computeFinalStats — this is only for
-    // catching the extra conditional portion that numeric properties data
-    // never captures. 2pc bonuses are essentially always fully flat/
-    // unconditional in HSR and are already fully covered by properties[0],
-    // so there's nothing legitimate to extract there — sending that text
-    // would just risk the model re-describing an already-applied bonus as
-    // if it needed a separate toggle, double-counting it.
+    // Any tier of a relic/ornament set's text can bundle a genuinely
+    // conditional effect, not just the 4pc tier — e.g. Pioneer Diver of
+    // Dead Waters' 2pc is "Increases DMG dealt to enemies with debuff by
+    // 12%," which is conditional on the ENEMY's state and has no numeric
+    // stat anywhere in fetched player data for it to already be captured
+    // by. Trying to pre-filter which tiers are "safe" to skip (2pc vs
+    // 4pc, body set vs ornament set) turned out to be guessing rather
+    // than a reliable rule, so every tier's text is sent through
+    // extraction instead — the prompt already knows how to separate a
+    // flat baseline (already applied via properties[0] in
+    // computeFinalStats) from a bundled conditional bonus, so it's the
+    // right place for that filtering to happen, not here.
     const setCounts = {};
     (activeCharacter.relicList || []).forEach((relic) => {
       const setID = relic._flat?.setID;
@@ -869,6 +870,12 @@ export default function ProfilePage() {
     Object.entries(setCounts).forEach(([setID, count]) => {
       const set = relicSets[setID];
       if (!set) return;
+      if (count >= 2 && set.desc[0] && isDamageRelevantText(set.desc[0])) {
+        abilities.push({
+          type: 'Relic Set (2pc)',
+          description: `${set.name} (2pc): ${set.desc[0]}`,
+        });
+      }
       if (count >= 4 && set.desc[1] && isDamageRelevantText(set.desc[1])) {
         abilities.push({
           type: 'Relic Set (4pc)',

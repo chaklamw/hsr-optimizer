@@ -84,5 +84,28 @@
       }
     ],
     "extractedAt": "2026-08-23T15:36:53.555Z"
+  },
+  "2c65ab17fa7704418deacd801ecf742060945408e1424c61253ff16ffe58cf09": {
+    "sourceType": "Relic Set (2pc)",
+    "conditionals": [],
+    "extractedAt": "2026-08-23T15:52:08.669Z"
+  },
+  "33c12695a08af1f7d4dc8948aa9ba16bbc86ad2067727cd7cf0949d1945fbf59": {
+    "sourceType": "Relic Set (2pc)",
+    "conditionals": [
+      {
+        "name": "Max HP Threshold Crit DMG Boost",
+        "appliesToAbility": "ALL",
+        "statType": "CRIT_DMG",
+        "trigger": "wearer's Max HP is 5000 or higher",
+        "valuesByStack": [
+          28
+        ],
+        "maxStacks": 1,
+        "suspicious": false,
+        "suspiciousNote": ""
+      }
+    ],
+    "extractedAt": "2026-08-23T15:52:09.638Z"
   }
 }
