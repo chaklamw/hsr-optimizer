@@ -20,10 +20,15 @@ app.use(express.json());
 // descriptions themselves are the only real input to the Groq call, so
 // hashing them gives a cache key that self-invalidates automatically
 // whenever kit text changes, with no manual "please forget this
-// character" step needed. This is a flat JSON file, not a real database
-// — fine for a single-user local tool, but would need swapping for
-// something like SQLite/Redis if this ever serves multiple people at
-// once (concurrent writes to the same file can clobber each other).
+// character" step needed. Keyed on KIT-ONLY abilities (Basic ATK, Skill,
+// Ultimate, Talent, etc.) — Light Cone Passive and Relic Set entries are
+// deliberately excluded from this hash and live in their own equipment
+// cache instead, so swapping a character's gear can never force an
+// unnecessary re-extraction of their unchanged kit. This is a flat JSON
+// file, not a real database — fine for a single-user local tool, but
+// would need swapping for something like SQLite/Redis if this ever serves
+// multiple people at once (concurrent writes to the same file can clobber
+// each other).
 const CONDITIONALS_CACHE_PATH = path.join(__dirname, 'conditionals-cache.json');
 
 function loadConditionalsCache() {
@@ -42,10 +47,10 @@ function saveConditionalsCache(cache) {
   }
 }
 
-function hashConditionalsInput(characterName, abilities) {
+function hashConditionalsInput(characterName, kitAbilities) {
   const hash = crypto.createHash('sha256');
   hash.update(characterName);
-  abilities.forEach((a) => {
+  kitAbilities.forEach((a) => {
     hash.update('\u0000' + a.type + '\u0000' + a.description);
   });
   return hash.digest('hex');
@@ -87,35 +92,6 @@ function hashEquipmentText(type, description) {
   const hash = crypto.createHash('sha256');
   hash.update(type + '\u0000' + description);
   return hash.digest('hex');
-}
-
-// A character cache entry stores only its OWN kit conditionals plus
-// references (hashes) to whichever equipment pieces it uses — never a
-// private copy of the equipment's conditionals themselves. Resolving those
-// refs live against the current equipment cache means a later correction
-// to one relic set's or light cone's extraction automatically applies to
-// every character that references it, with no per-character cache
-// invalidation needed. Falls back to the old shape (`entry.conditionals`,
-// a fully merged list with no refs) for entries written before this
-// change, so the existing cache file doesn't need to be wiped.
-function resolveCachedCharacterEntry(entry) {
-  if (!Array.isArray(entry.equipmentRefs)) {
-    return entry.conditionals || [];
-  }
-
-  const equipmentCache = loadEquipmentCache();
-  const equipmentConditionals = [];
-
-  entry.equipmentRefs.forEach((ref) => {
-    const cached = equipmentCache[ref.key];
-    if (!cached) {
-      console.log(`Equipment ref ${ref.key.slice(0, 8)} (${ref.sourceType}) missing from equipment cache — skipping`);
-      return;
-    }
-    equipmentConditionals.push(...cached.conditionals);
-  });
-
-  return [...(entry.characterConditionals || []), ...equipmentConditionals];
 }
 
 // This account's Groq tier caps requests at a fixed tokens-per-minute
@@ -469,6 +445,66 @@ Second, if the damage type is STANDARD, determine which single stat the skill's 
   }
 });
 
+const CONDITIONAL_SYSTEM_PROMPT = `You are extracting structured conditional damage bonuses from a single Honkai: Star Rail ability description. Respond with ONLY a JSON object in this exact shape, no other text, no markdown formatting, no code fences:
+{"conditionals": [{"name": string, "appliesToAbility": string, "statType": string, "trigger": string, "valuesByStack": number[], "maxStacks": number}]}
+If no qualifying conditional effects are found in this ability, respond with {"conditionals": []}.`;
+
+const CONDITIONAL_EXTRACTION_RULES = `Find any effects where the character's DMG (or a specific ability's DMG) increases conditionally — for example, stacking bonuses from repeated casts, threshold-based bonuses (e.g. "when HP is above/below X%"), or state-based bonuses. If an effect is worded as buffing "all allies," "the team," or similar, still extract it as applying to this character — the wearer/character being analyzed is a member of their own ally list and receives effects worded that way, even though the text doesn't say "the wearer" directly. Do not skip an effect just because it's phrased as team-wide support rather than self-targeted.
+
+Also find unconditional effects that reduce an ENEMY's RES, DEF, or otherwise make them take more damage (e.g. "decreases all enemies' All-Type RES by 25%", a summon that unconditionally shreds DEF) — always extract these even though they have no trigger, since enemy-side debuffs are never reflected in the character's own fetched stats and this is the only place they can be captured. Use a trigger description like "always active while [source] is deployed" for these.
+
+Ignore effects that are flat, always-on increases to the CHARACTER's own stats with no condition (e.g. a trace that always gives +20% CRIT DMG with no trigger) — these are self-buffs already reflected in the character's fetched base stats, so re-extracting them would double-count. This self-buff exclusion does NOT apply to enemy-facing debuffs (RES/DEF reduction, vulnerability) — extract those regardless of whether they have a trigger, per the paragraph above. If this ability is a [Relic Set (4pc)] entry, it often bundles a flat baseline together with a genuinely conditional bonus in the same sentence (e.g. "+8% CRIT Rate. When SPD is below 95 at the start of an action, additionally increases CRIT Rate by 12%") — only extract the conditional portion (the +12% tied to the SPD trigger), not the flat +8% baseline, since that baseline is already applied elsewhere and re-extracting it would double-count it.
+
+Some effects list multiple mutually-exclusive threshold tiers using slash-separated values, e.g. "if SPD is less than 110/95, increases CRIT Rate by 20%/32%" (a weaker bonus at an easier threshold, a stronger bonus at a stricter threshold — only one applies at a time, not both). Represent these using valuesByStack the same way as ordinary stacks: valuesByStack: [20, 32], maxStacks: 2, with the trigger text explaining what each tier requires (e.g. "Tier 1: SPD < 110 -> +20% CRIT Rate. Tier 2 (stricter): SPD < 95 -> +32% CRIT Rate"). Do not skip this kind of effect just because it isn't literally "stacking" — picking a single tier value is exactly how this calculator already applies a selected value, so tiers fit the same structure.
+
+For each conditional effect found, determine:
+- appliesToAbility: which ability type it affects — must be exactly one of "BASIC", "SKILL", "ULT", "FUA", "DOT", or "ALL" if it affects all of the character's damage. Use "ALL" for Talent/passive-sourced DMG Boosts that aren't scoped to one specific attack type — do not invent other category names.
+- statType: what it boosts — one of "DMG_PERCENT", "CRIT_RATE", "CRIT_DMG", "ATK_PERCENT", "DEF_PEN", "RES_PEN", "VULNERABILITY", or "OTHER" if none of these fit
+- trigger: a short plain-English description of the condition
+- valuesByStack: an array of the bonus values in percent (e.g. 20 means +20%, not 0.2 and not 2000), indexed by stack count starting at 1 (e.g. [100, 200] means 1 stack = 100%, 2 stacks = 200%). If it's not stack-based but a single on/off condition, use a single-element array. The array length must exactly equal maxStacks. IMPORTANT: descriptions phrased as "+X% per stack, up to N stacks" are still cumulative and must be expanded to the full N-element array (e.g. "25% per stack, up to 3 stacks" -> valuesByStack: [25, 50, 75], maxStacks: 3) — never respond with just the single per-stack number. If the effect scales continuously (e.g. "+X% DMG per 1% Max HP lost, up to Y%") rather than in discrete stacks, represent only the minimum and maximum bound as a 2-element array with maxStacks 2, and say so in the trigger text — do not invent intermediate stack values.
+- maxStacks: the highest stack count reachable, or 1 if not stack-based. Must equal valuesByStack.length.`;
+
+// Runs one ability's text through Groq and returns its raw (unsanitized)
+// conditionals. Shared by both the kit loop and the equipment loop so the
+// pacing/retry/parsing logic only exists in one place. `characterName` is
+// omitted from the prompt for equipment abilities — see the shareable-
+// equipment comment further down for why.
+async function extractOneAbility(ability, characterName) {
+  const conditionalUserPrompt = characterName
+    ? `Character: "${characterName}"
+
+Ability: [${ability.type}] ${ability.description}
+
+${CONDITIONAL_EXTRACTION_RULES}`
+    : `Ability: [${ability.type}] ${ability.description}
+
+${CONDITIONAL_EXTRACTION_RULES}`;
+
+  const result = await callGroqJsonWithRetry({
+    systemPrompt: CONDITIONAL_SYSTEM_PROMPT,
+    userPrompt: conditionalUserPrompt,
+    reasoningEffort: 'low',
+    maxTokens: 1536,
+  });
+
+  if (result.error) {
+    console.log(`Extraction failed for [${ability.type}]${characterName ? ' on ' + characterName : ''}: ${result.error}`);
+    return { conditionals: null, failed: true };
+  }
+
+  const parsed = result.parsed;
+  if (!Array.isArray(parsed?.conditionals)) {
+    console.log(`Unexpected shape for [${ability.type}]:`, parsed);
+    return { conditionals: null, failed: true };
+  }
+
+  if (parsed.conditionals.length > 0) {
+    console.log(`[${ability.type}] extracted ${parsed.conditionals.length}:`, JSON.stringify(parsed.conditionals, null, 2));
+  }
+
+  return { conditionals: parsed.conditionals, failed: false };
+}
+
 // Takes a character's resolved ability descriptions (Basic ATK, Skill,
 // Ultimate, Talent, etc. with their numeric placeholders already filled
 // in) and asks Groq to draft the conditional/stacking bonuses buried in
@@ -499,17 +535,6 @@ app.post('/api/extract-conditionals', async (req, res) => {
     return;
   }
 
-  const cacheKey = hashConditionalsInput(characterName, abilities);
-  const cache = loadConditionalsCache();
-
-  if (!forceRefresh && cache[cacheKey]) {
-    const entry = cache[cacheKey];
-    const resolved = resolveCachedCharacterEntry(entry);
-    console.log(`Conditionals cache hit for ${characterName} (${cacheKey.slice(0, 8)})`);
-    res.json({ conditionals: resolved, cached: true, extractedAt: entry.extractedAt });
-    return;
-  }
-
   if (!process.env.GROQ_API_KEY) {
     res.status(500).json({ error: 'Server is missing GROQ_API_KEY' });
     return;
@@ -520,169 +545,120 @@ app.post('/api/extract-conditionals', async (req, res) => {
     abilities.map((a) => `[${a.type}] ${a.description.slice(0, 400)}${a.description.length > 400 ? '...' : ''}`)
   );
 
-  const conditionalSystemPrompt = `You are extracting structured conditional damage bonuses from a single Honkai: Star Rail ability description. Respond with ONLY a JSON object in this exact shape, no other text, no markdown formatting, no code fences:
-{"conditionals": [{"name": string, "appliesToAbility": string, "statType": string, "trigger": string, "valuesByStack": number[], "maxStacks": number}]}
-If no qualifying conditional effects are found in this ability, respond with {"conditionals": []}.`;
-
-  const conditionalExtractionRules = `Find any effects where the character's DMG (or a specific ability's DMG) increases conditionally — for example, stacking bonuses from repeated casts, threshold-based bonuses (e.g. "when HP is above/below X%"), or state-based bonuses. If an effect is worded as buffing "all allies," "the team," or similar, still extract it as applying to this character — the wearer/character being analyzed is a member of their own ally list and receives effects worded that way, even though the text doesn't say "the wearer" directly. Do not skip an effect just because it's phrased as team-wide support rather than self-targeted.
-
-Also find unconditional effects that reduce an ENEMY's RES, DEF, or otherwise make them take more damage (e.g. "decreases all enemies' All-Type RES by 25%", a summon that unconditionally shreds DEF) — always extract these even though they have no trigger, since enemy-side debuffs are never reflected in the character's own fetched stats and this is the only place they can be captured. Use a trigger description like "always active while [source] is deployed" for these.
-
-Ignore effects that are flat, always-on increases to the CHARACTER's own stats with no condition (e.g. a trace that always gives +20% CRIT DMG with no trigger) — these are self-buffs already reflected in the character's fetched base stats, so re-extracting them would double-count. This self-buff exclusion does NOT apply to enemy-facing debuffs (RES/DEF reduction, vulnerability) — extract those regardless of whether they have a trigger, per the paragraph above. If this ability is a [Relic Set (4pc)] entry, it often bundles a flat baseline together with a genuinely conditional bonus in the same sentence (e.g. "+8% CRIT Rate. When SPD is below 95 at the start of an action, additionally increases CRIT Rate by 12%") — only extract the conditional portion (the +12% tied to the SPD trigger), not the flat +8% baseline, since that baseline is already applied elsewhere and re-extracting it would double-count it.
-
-Some effects list multiple mutually-exclusive threshold tiers using slash-separated values, e.g. "if SPD is less than 110/95, increases CRIT Rate by 20%/32%" (a weaker bonus at an easier threshold, a stronger bonus at a stricter threshold — only one applies at a time, not both). Represent these using valuesByStack the same way as ordinary stacks: valuesByStack: [20, 32], maxStacks: 2, with the trigger text explaining what each tier requires (e.g. "Tier 1: SPD < 110 -> +20% CRIT Rate. Tier 2 (stricter): SPD < 95 -> +32% CRIT Rate"). Do not skip this kind of effect just because it isn't literally "stacking" — picking a single tier value is exactly how this calculator already applies a selected value, so tiers fit the same structure.
-
-For each conditional effect found, determine:
-- appliesToAbility: which ability type it affects — must be exactly one of "BASIC", "SKILL", "ULT", "FUA", "DOT", or "ALL" if it affects all of the character's damage. Use "ALL" for Talent/passive-sourced DMG Boosts that aren't scoped to one specific attack type — do not invent other category names.
-- statType: what it boosts — one of "DMG_PERCENT", "CRIT_RATE", "CRIT_DMG", "ATK_PERCENT", "DEF_PEN", "RES_PEN", "VULNERABILITY", or "OTHER" if none of these fit
-- trigger: a short plain-English description of the condition
-- valuesByStack: an array of the bonus values in percent (e.g. 20 means +20%, not 0.2 and not 2000), indexed by stack count starting at 1 (e.g. [100, 200] means 1 stack = 100%, 2 stacks = 200%). If it's not stack-based but a single on/off condition, use a single-element array. The array length must exactly equal maxStacks. IMPORTANT: descriptions phrased as "+X% per stack, up to N stacks" are still cumulative and must be expanded to the full N-element array (e.g. "25% per stack, up to 3 stacks" -> valuesByStack: [25, 50, 75], maxStacks: 3) — never respond with just the single per-stack number. If the effect scales continuously (e.g. "+X% DMG per 1% Max HP lost, up to Y%") rather than in discrete stacks, represent only the minimum and maximum bound as a 2-element array with maxStacks 2, and say so in the trigger text — do not invent intermediate stack values.
-- maxStacks: the highest stack count reachable, or 1 if not stack-based. Must equal valuesByStack.length.`;
+  // Kit and equipment are now two fully independent caches, not one hash
+  // covering everything the character happened to be wearing at scan
+  // time. A character's own Basic ATK/Skill/Ultimate/Talent text doesn't
+  // change when you swap their relics — so bundling equipment into the
+  // same cache key meant swapping gear silently forced a full, wasteful
+  // re-extraction of the unchanged kit too. Splitting them means a relic
+  // swap only ever costs (at most) a fresh equipment lookup, and the kit
+  // stays a cache hit regardless of what's currently equipped.
+  const kitAbilities = abilities.filter((a) => !isShareableEquipment(a.type));
+  const equipmentAbilities = abilities.filter((a) => isShareableEquipment(a.type));
 
   try {
-    const characterConditionals = [];
-    const equipmentRefs = [];
-    let failedCount = 0;
+    const kitCache = loadConditionalsCache();
+    const kitCacheKey = hashConditionalsInput(characterName, kitAbilities);
+
+    let callsAttempted = 0;
+    let callsFailed = 0;
+
+    let characterConditionals;
+    let kitFromCache = false;
+
+    if (!forceRefresh && kitCache[kitCacheKey]) {
+      characterConditionals = kitCache[kitCacheKey].conditionals;
+      kitFromCache = true;
+      console.log(
+        `Kit cache hit for ${characterName} (${kitCacheKey.slice(0, 8)}) — reused ${characterConditionals.length} conditional(s), skipped Groq for ${kitAbilities.length} kit ability/abilities`
+      );
+    } else {
+      const kitRaw = [];
+      for (let i = 0; i < kitAbilities.length; i++) {
+        if (i > 0) await sleep(600);
+        callsAttempted += 1;
+        const { conditionals, failed } = await extractOneAbility(kitAbilities[i], characterName);
+        if (failed) {
+          callsFailed += 1;
+          continue;
+        }
+        kitRaw.push(...conditionals);
+      }
+      characterConditionals = sanitizeConditionals(kitRaw);
+      kitCache[kitCacheKey] = { characterName, conditionals: characterConditionals, extractedAt: new Date().toISOString() };
+      saveConditionalsCache(kitCache);
+    }
+
     const equipmentCache = loadEquipmentCache();
     let equipmentCacheDirty = false;
+    const equipmentConditionals = [];
 
-    // One focused call per ability instead of one mega-call covering the
-    // whole kit. A combined prompt forces the model to hold 5-7 abilities
-    // in its head at once, which either burns most of its hidden-reasoning
-    // budget before finishing (medium/high effort) or causes it to stop
-    // after the first match it finds (low effort) — either way, later
-    // abilities in the list (Light Cone Passive, Relic Set) silently lose
-    // out. Per-ability calls keep each prompt small enough that there's
-    // comfortable room under the TPM cap for the model to actually finish
-    // reasoning about that one ability, and a truncated/failed call only
-    // costs that one ability's conditionals rather than the whole kit's.
-    // Run sequentially (not Promise.all) so only one request's tokens are
-    // reserved against the TPM budget at a time.
-    for (let i = 0; i < abilities.length; i++) {
-      const ability = abilities[i];
-      const shareable = isShareableEquipment(ability.type);
-      const equipmentKey = shareable ? hashEquipmentText(ability.type, ability.description) : null;
+    for (let i = 0; i < equipmentAbilities.length; i++) {
+      const ability = equipmentAbilities[i];
+      const equipmentKey = hashEquipmentText(ability.type, ability.description);
 
-      // forceRefresh bypasses BOTH caches for this request — "Re-detect"
-      // should mean "regenerate everything from scratch," not "regenerate
-      // this character's kit but still trust whatever this piece of gear
-      // was cached as before." Since the equipment cache is shared, a
-      // forced re-extraction here also benefits every other character
-      // that references this same set/LC going forward.
-      if (!forceRefresh && shareable && equipmentCache[equipmentKey]) {
+      // forceRefresh bypasses BOTH caches — "Re-detect" should mean
+      // "regenerate everything from scratch," not "regenerate the kit but
+      // still trust whatever this piece of gear was cached as before."
+      // Since the equipment cache is shared, a forced re-extraction here
+      // also benefits every other character that references this same
+      // set/LC going forward.
+      if (!forceRefresh && equipmentCache[equipmentKey]) {
         const cachedConditionals = equipmentCache[equipmentKey].conditionals;
         console.log(
           `Equipment cache hit for [${ability.type}] (${equipmentKey.slice(0, 8)}) — reused ${cachedConditionals.length} conditional(s), skipped Groq call`
         );
-        equipmentRefs.push({ key: equipmentKey, sourceType: ability.type });
+        equipmentConditionals.push(...cachedConditionals);
         continue;
       }
 
-      if (i > 0) {
-        // Small pacing gap between calls — doesn't guarantee staying under
-        // the rolling TPM budget on its own, but reduces how often we hit
-        // it, since callGroqJsonWithRetry already handles the case where
-        // we do.
-        await sleep(600);
-      }
-
-      // Equipment prompts deliberately omit the character's name — a
-      // relic set or light cone's conditional effects don't depend on who
-      // equips it (only "the wearer," generically), and keeping the
-      // character out of the prompt keeps the extraction reusable across
-      // every future character who wears the same piece, not just this one.
-      const conditionalUserPrompt = shareable
-        ? `Ability: [${ability.type}] ${ability.description}
-
-${conditionalExtractionRules}`
-        : `Character: "${characterName}"
-
-Ability: [${ability.type}] ${ability.description}
-
-${conditionalExtractionRules}`;
-
-      const result = await callGroqJsonWithRetry({
-        systemPrompt: conditionalSystemPrompt,
-        userPrompt: conditionalUserPrompt,
-        reasoningEffort: 'low',
-        maxTokens: 1536,
-      });
-
-      if (result.error) {
-        console.log(`Extraction failed for [${ability.type}] on ${characterName}: ${result.error}`);
-        failedCount += 1;
+      if (!kitFromCache || i > 0) await sleep(600);
+      callsAttempted += 1;
+      const { conditionals, failed } = await extractOneAbility(ability, null);
+      if (failed) {
+        callsFailed += 1;
         continue;
       }
 
-      const parsed = result.parsed;
-      if (!Array.isArray(parsed?.conditionals)) {
-        console.log(`Unexpected shape for [${ability.type}] on ${characterName}:`, parsed);
-        failedCount += 1;
-        continue;
-      }
-
-      if (parsed.conditionals.length > 0) {
-        console.log(`[${ability.type}] extracted ${parsed.conditionals.length}:`, JSON.stringify(parsed.conditionals, null, 2));
-      }
-
-      if (shareable) {
-        // Sanitize before caching, not after merging with the rest of the
-        // kit — an equipment cache entry needs to be self-contained and
-        // trustworthy on its own, since a future character will pull it
-        // straight out of the cache without ever re-running it through
-        // sanitizeConditionals() (only the character's own raw entries get
-        // swept up in the final sanitize pass below).
-        const sanitizedEquipment = sanitizeConditionals(parsed.conditionals);
-        equipmentCache[equipmentKey] = {
-          sourceType: ability.type,
-          conditionals: sanitizedEquipment,
-          extractedAt: new Date().toISOString(),
-        };
-        equipmentCacheDirty = true;
-        equipmentRefs.push({ key: equipmentKey, sourceType: ability.type });
-      } else {
-        characterConditionals.push(...parsed.conditionals);
-      }
+      const sanitizedEquipment = sanitizeConditionals(conditionals);
+      equipmentCache[equipmentKey] = {
+        sourceType: ability.type,
+        conditionals: sanitizedEquipment,
+        extractedAt: new Date().toISOString(),
+      };
+      equipmentCacheDirty = true;
+      equipmentConditionals.push(...sanitizedEquipment);
     }
 
     if (equipmentCacheDirty) {
       saveEquipmentCache(equipmentCache);
     }
 
-    if (failedCount === abilities.length) {
+    const combined = [...characterConditionals, ...equipmentConditionals];
+
+    if (callsAttempted > 0 && callsFailed === callsAttempted && combined.length === 0) {
       res.status(502).json({
         error: 'Every ability call failed — Groq may be rate-limited or unavailable. Nothing was cached; try again.',
       });
       return;
     }
 
-    if (failedCount > 0) {
-      console.log(`${failedCount}/${abilities.length} ability calls failed for ${characterName} — results below are partial.`);
+    if (callsFailed > 0) {
+      console.log(`${callsFailed}/${callsAttempted} fresh ability calls failed for ${characterName} — results below may be partial.`);
     }
 
-    // Sanitize only the character's own kit output here — equipment
-    // entries were already sanitized at the point they were cached, and
-    // re-sanitizing on every read (rather than once, at write time) would
-    // be wasted work every single time any character with that gear is
-    // scanned or has a cache hit resolved.
-    const sanitizedCharacterConditionals = sanitizeConditionals(characterConditionals);
-    const resolvedEquipmentConditionals = equipmentRefs.flatMap(
-      (ref) => equipmentCache[ref.key]?.conditionals || []
-    );
-    const combined = [...sanitizedCharacterConditionals, ...resolvedEquipmentConditionals];
+    console.log(`Returning ${combined.length} total conditional(s) for ${characterName} (kit ${kitFromCache ? 'cached' : 'fresh'}, ${equipmentAbilities.length} equipment piece(s))`);
 
-    console.log(`Extracted ${combined.length} total conditional(s) across ${abilities.length} abilities for ${characterName}`);
-
-    const flaggedSuspicious = sanitizedCharacterConditionals.filter((c) => c.suspicious);
+    const flaggedSuspicious = combined.filter((c) => c.suspicious);
     if (flaggedSuspicious.length > 0) {
       console.log('Sanitizer flagged as suspicious:', flaggedSuspicious.map((c) => `${c.name} (${c.suspiciousNote})`));
     }
 
-    const extractedAt = new Date().toISOString();
-    cache[cacheKey] = { characterName, characterConditionals: sanitizedCharacterConditionals, equipmentRefs, extractedAt };
-    saveConditionalsCache(cache);
-
-    res.json({ conditionals: combined, cached: false, extractedAt });
+    res.json({
+      conditionals: combined,
+      cached: callsAttempted === 0,
+      extractedAt: kitFromCache ? kitCache[kitCacheKey].extractedAt : new Date().toISOString(),
+    });
   } catch (err) {
     console.log('Error calling Groq:', err);
     res.status(500).json({ error: 'Failed to extract conditionals' });

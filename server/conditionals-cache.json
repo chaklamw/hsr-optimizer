@@ -1,7 +1,7 @@
 {
-  "7b876dd827e5ba2d2214c99afe3b6136d3a6f7fdf240711a761274ebf6b4c12b": {
+  "540ee43a5d818da7d79fcfa68fc35c03d5a8d348e7b3c086be55a2bba337fe0b": {
     "characterName": "Yao Guang",
-    "characterConditionals": [
+    "conditionals": [
       {
         "name": "Great Boon Trigger",
         "appliesToAbility": "ALL",
@@ -39,16 +39,6 @@
         "suspiciousNote": ""
       }
     ],
-    "equipmentRefs": [
-      {
-        "key": "86df2c0787759bea7694f0d75ed689d1fa5968a3e787f0f4915fcef6ca4a04c1",
-        "sourceType": "Light Cone Passive"
-      },
-      {
-        "key": "3ed410fe19601ec6d513777c1f78bffd45df77ea3274c0285096e53eff2061d8",
-        "sourceType": "Relic Set (4pc)"
-      }
-    ],
-    "extractedAt": "2026-08-23T06:26:17.623Z"
+    "extractedAt": "2026-08-23T06:35:29.151Z"
   }
 }
