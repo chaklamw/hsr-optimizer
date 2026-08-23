@@ -12,5 +12,12 @@
       "scalingStat": "HP"
     },
     "extractedAt": "2026-08-23T15:30:40.980Z"
+  },
+  "d56591b695d99ce98caa20969c05e285e34855248974cc4a4afb328a47ce90d1": {
+    "result": {
+      "damageType": "ELATION",
+      "scalingStat": "NONE"
+    },
+    "extractedAt": "2026-08-23T16:02:07.935Z"
   }
 }

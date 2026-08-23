@@ -680,6 +680,209 @@ function computeFinalStats(character, promotions, relicSets, skillTrees, lightCo
   };
 }
 
+// Builds a fake relic object shaped like the real relics in
+// character.relicList (i.e. matching the `_flat.props` shape
+// computeFinalStats reads), out of the relic-compare form's main stat +
+// substats. Those form values are stored in human-readable display units
+// (e.g. 10.7 for "10.7%"), same as scoreFormStatLine expects, so percent
+// stat types need /100 to become the fraction units _flat.props uses
+// internally — flat stat types (HP/ATK/DEF/SPD Delta) are used as-is.
+//
+// Assumes the new relic keeps the same set as the piece it's replacing,
+// since the compare form has no way to specify a different set — swapping
+// sets isn't something this handles yet.
+function buildSyntheticRelic(slotType, setID, mainStat, substats) {
+  const props = [];
+
+  if (mainStat.type && mainStat.value !== '') {
+    const value = Number(mainStat.value);
+    props.push({
+      type: mainStat.type,
+      value: FLAT_STAT_TYPES.has(mainStat.type) ? value : value / 100,
+    });
+  }
+
+  substats.forEach((s) => {
+    if (!s.type || s.value === '') return;
+    const value = Number(s.value);
+    props.push({
+      type: s.type,
+      value: FLAT_STAT_TYPES.has(s.type) ? value : value / 100,
+    });
+  });
+
+  return {
+    type: slotType,
+    _flat: { setID, props },
+  };
+}
+
+// Recomputes total ability damage for a given stats block (as returned by
+// computeFinalStats), using whatever ability/enemy/conditional
+// configuration is currently set in the Damage Calculator. This mirrors
+// the calculation embedded in the showDamageCalc render block below, but
+// is parameterized on `stats` instead of closing over activeStats, so the
+// relic-compare panel can call it twice — once for the equipped relic's
+// stats, once for the hypothetical "new relic" stats — and diff the
+// result. Kept as a separate pure function rather than sharing code with
+// the render block to avoid touching that already-working JSX; worth
+// unifying later if the duplication becomes a maintenance problem.
+function computeScenarioTotalDamage(stats, scenario) {
+  const {
+    activeCharacter,
+    characterSkills,
+    skillIds,
+    calcSkillId,
+    calcSkillLevel,
+    calcActivationIndex,
+    calcParamIndex,
+    calcEnemyLevel,
+    calcEnemyRes,
+    calcDefShred,
+    calcEnemyCount,
+    calcEnemyBroken,
+    calcDamageType,
+    calcMerrymakePercent,
+    calcPunchlineValue,
+    calcUsingCertifiedBanger,
+    calcScalingStat,
+    calcNonStatValue,
+    calcStackingTriggers,
+    aiConditionals,
+    manualConditionals,
+    aiConditionalStacks,
+    elementDmgType,
+  } = scenario;
+
+  if (!stats || !calcSkillId) return null;
+  const skill = characterSkills[calcSkillId];
+  if (!skill) return null;
+
+  const levelParams = skill.params[calcSkillLevel - 1] || [];
+  const resolvedSkillDesc = formatLightConeDesc(skill.desc, levelParams);
+  const nonStatScalingLabel = getNonStatScalingLabel(resolvedSkillDesc);
+  const scalingKey = calcScalingStat ? calcScalingStat.toLowerCase() : '';
+  const scalingValue = nonStatScalingLabel ? calcNonStatValue : scalingKey ? stats[scalingKey] : null;
+
+  const elementalDmgPercent =
+    elementDmgType && stats.genericStats[elementDmgType] ? stats.genericStats[elementDmgType] * 100 : 0;
+  const allDmgPercent = stats.genericStats.AllDamageTypeAddedRatio
+    ? stats.genericStats.AllDamageTypeAddedRatio * 100
+    : 0;
+  const isElation = calcDamageType === DamageType.ELATION;
+  const elationPercent = stats.genericStats.ElationDamageAddedRatio
+    ? stats.genericStats.ElationDamageAddedRatio * 100
+    : 0;
+
+  const matchedAll = [
+    ...aiConditionals.filter((c) => conditionalAppliesToSkill(c, skill.type_text)),
+    ...manualConditionals.filter((c) => conditionalAppliesToSkill(c, skill.type_text)),
+  ];
+  const sumConditionalStat = (statType) =>
+    matchedAll.reduce((sum, c) => {
+      if (c.statType !== statType) return sum;
+      const stacks = aiConditionalStacks[c.name] || 0;
+      return sum + (c.valuesByStack[stacks - 1] || 0);
+    }, 0);
+
+  const aiDmgPercent = sumConditionalStat('DMG_PERCENT');
+  const aiResPenPercent = sumConditionalStat('RES_PEN');
+  const aiDefPenPercent = sumConditionalStat('DEF_PEN');
+  const aiVulnerabilityPercent = sumConditionalStat('VULNERABILITY');
+  const aiCritRateBonus = sumConditionalStat('CRIT_RATE');
+  const aiCritDmgBonus = sumConditionalStat('CRIT_DMG');
+  const aiAtkPercentBonus = sumConditionalStat('ATK_PERCENT');
+
+  const effectiveEnemyRes = calcEnemyRes - aiResPenPercent;
+  const effectiveDefShred = calcDefShred + aiDefPenPercent;
+  const effectiveCritRatePercent = parseFloat(stats.critRate) + aiCritRateBonus;
+  const effectiveCritDmgPercent = parseFloat(stats.critDmg) + aiCritDmgBonus;
+  const effectiveScalingValue =
+    scalingKey === 'atk' && typeof scalingValue === 'number'
+      ? scalingValue * (1 + aiAtkPercentBonus / 100)
+      : scalingValue;
+
+  const damagePercentIndices = getDamagePercentParamIndices(skill.desc);
+  const hitIndices = damagePercentIndices.length > 0 ? damagePercentIndices : [0];
+  const hasMultipleHitValues = hitIndices.length > 1;
+  const selectedHitIndex = hitIndices.includes(calcParamIndex) ? calcParamIndex : hitIndices[0];
+
+  const baseMultiplier = levelParams[selectedHitIndex];
+  const escalatingMultipliers = getEscalatingMultipliers(resolvedSkillDesc);
+  const activationMultipliers = escalatingMultipliers ? [baseMultiplier, ...escalatingMultipliers] : null;
+  const selectedActivationMultiplier = activationMultipliers
+    ? activationMultipliers[calcActivationIndex] ?? activationMultipliers[0]
+    : baseMultiplier;
+
+  const allAbilities = (skillIds || [])
+    .map((id) => characterSkills[id])
+    .filter(Boolean)
+    .map((s) => ({
+      name: s.name,
+      desc: formatLightConeDesc(s.desc, s.params[s.params.length - 1]) || s.desc || '',
+    }))
+    .filter((a) => a.desc);
+  const perHitStackingBonus = hasMultipleHitValues ? getPerHitTargetStackingBonus(allAbilities) : null;
+  const getStackingDmgPercent = (hitIdx) => {
+    if (!perHitStackingBonus) return 0;
+    const perStack = hitIdx === hitIndices[0] ? perHitStackingBonus.mainPerStack : perHitStackingBonus.adjacentPerStack;
+    return perStack * calcStackingTriggers * 100;
+  };
+
+  const computeHitDamage = (multiplierFraction, extraDmgPercent = 0) => {
+    const brokenMultiplier = calcEnemyBroken ? 1.0 : 0.9;
+
+    if (isElation) {
+      return computeElationDamage({
+        abilityMultiplierPercent: (multiplierFraction || 0) * 100,
+        characterLevel: activeCharacter.level,
+        enemyLevel: calcEnemyLevel,
+        elationPercent,
+        merrymakePercent: calcMerrymakePercent,
+        punchlineValue: calcPunchlineValue,
+        usingCertifiedBanger: calcUsingCertifiedBanger,
+        critRatePercent: effectiveCritRatePercent,
+        critDmgPercent: effectiveCritDmgPercent,
+        enemyResPercent: effectiveEnemyRes,
+        defReductionPercent: effectiveDefShred,
+        vulnerabilityPercent: aiVulnerabilityPercent,
+        brokenMultiplier,
+      });
+    }
+
+    return effectiveScalingValue != null
+      ? computeDamage({
+          scalingStatValue: effectiveScalingValue,
+          skillMultiplierPercent: (multiplierFraction || 0) * 100,
+          characterLevel: activeCharacter.level,
+          enemyLevel: calcEnemyLevel,
+          enemyResPercent: effectiveEnemyRes,
+          defShredPercent: effectiveDefShred,
+          elementalDmgPercent: elementalDmgPercent + allDmgPercent + aiDmgPercent + extraDmgPercent,
+          critRatePercent: effectiveCritRatePercent,
+          critDmgPercent: effectiveCritDmgPercent,
+          vulnerabilityPercent: aiVulnerabilityPercent,
+          brokenMultiplier,
+        })
+      : null;
+  };
+
+  const damage = computeHitDamage(selectedActivationMultiplier, getStackingDmgPercent(selectedHitIndex));
+  if (damage == null) return null;
+
+  const instancedHitInfo = getInstancedHitInfo(resolvedSkillDesc);
+  const instancedHitDamage = instancedHitInfo ? computeHitDamage(instancedHitInfo.perInstancePercent) : null;
+  const instancedHitTotal = instancedHitDamage != null ? instancedHitDamage * instancedHitInfo.instanceCount : null;
+
+  const baseTotalDamage = hasMultipleHitValues
+    ? (computeHitDamage(levelParams[hitIndices[0]], getStackingDmgPercent(hitIndices[0])) || 0) +
+      (computeHitDamage(levelParams[hitIndices[1]], getStackingDmgPercent(hitIndices[1])) || 0) *
+        Math.max(0, calcEnemyCount - 1)
+    : damage * calcEnemyCount;
+
+  return instancedHitTotal != null ? baseTotalDamage + instancedHitTotal : baseTotalDamage;
+}
+
 export default function ProfilePage() {
   const { uid } = useParams();
   const [data, setData] = useState(null);
@@ -1306,6 +1509,77 @@ export default function ProfilePage() {
                     return sum + scoreFormStatLine(s.type, Number(s.value), weights);
                   }, 0);
 
+                // Damage-impact preview: recompute the character's full stat
+                // block with the new relic's stats swapped in for the
+                // equipped one at this slot, then re-run whatever
+                // ability/enemy/conditional config is currently set in the
+                // Damage Calculator against both stat blocks. Only possible
+                // once a skill has been picked there — calcSkillId lives in
+                // component state, so it persists even if that modal is
+                // closed.
+                const newRelicFormComplete =
+                  compareMainStat.type &&
+                  compareMainStat.value !== '' &&
+                  compareSubstats.every((s) => (s.type && s.value !== '') || (!s.type && s.value === ''));
+
+                let damageDelta = null;
+                if (calcSkillId && newRelicFormComplete) {
+                  const syntheticRelic = buildSyntheticRelic(
+                    compareSlot,
+                    equippedRelic._flat.setID,
+                    compareMainStat,
+                    compareSubstats
+                  );
+                  const swappedRelicList = activeCharacter.relicList.map((r) =>
+                    r.type === compareSlot ? syntheticRelic : r
+                  );
+                  const newStats = computeFinalStats(
+                    { ...activeCharacter, relicList: swappedRelicList },
+                    characterPromotions,
+                    relicSets,
+                    skillTrees,
+                    lightConeRanks
+                  );
+
+                  const scenario = {
+                    activeCharacter,
+                    characterSkills,
+                    skillIds: activeInfo?.skills || [],
+                    calcSkillId,
+                    calcSkillLevel,
+                    calcActivationIndex,
+                    calcParamIndex,
+                    calcEnemyLevel,
+                    calcEnemyRes,
+                    calcDefShred,
+                    calcEnemyCount,
+                    calcEnemyBroken,
+                    calcDamageType,
+                    calcMerrymakePercent,
+                    calcPunchlineValue,
+                    calcUsingCertifiedBanger,
+                    calcScalingStat,
+                    calcNonStatValue,
+                    calcStackingTriggers,
+                    aiConditionals,
+                    manualConditionals,
+                    aiConditionalStacks,
+                    elementDmgType: ELEMENT_DMG_TYPE[activeInfo?.element],
+                  };
+
+                  const equippedDamage = computeScenarioTotalDamage(activeStats, scenario);
+                  const newDamage = newStats ? computeScenarioTotalDamage(newStats, scenario) : null;
+
+                  if (equippedDamage != null && newDamage != null) {
+                    damageDelta = {
+                      equippedDamage,
+                      newDamage,
+                      diff: newDamage - equippedDamage,
+                      pct: equippedDamage !== 0 ? ((newDamage - equippedDamage) / equippedDamage) * 100 : 0,
+                    };
+                  }
+                }
+
                 function updateSubstat(index, field, value) {
                   setCompareSubstats((prev) =>
                     prev.map((s, i) => (i === index ? { ...s, [field]: value } : s))
@@ -1462,6 +1736,26 @@ export default function ProfilePage() {
                           ? `New relic is better by ${(newScore - equippedScore).toFixed(1)}`
                           : `Equipped relic is better by ${(equippedScore - newScore).toFixed(1)}`}
                       </p>
+
+                      {damageDelta ? (
+                        <p
+                          className={`compare-verdict ${
+                            damageDelta.diff >= 0 ? 'compare-verdict-win' : 'compare-verdict-lose'
+                          }`}
+                        >
+                          {Math.round(damageDelta.equippedDamage).toLocaleString()} →{' '}
+                          {Math.round(damageDelta.newDamage).toLocaleString()} DMG (
+                          {damageDelta.diff >= 0 ? '+' : ''}
+                          {Math.round(damageDelta.diff).toLocaleString()}, {damageDelta.diff >= 0 ? '+' : ''}
+                          {damageDelta.pct.toFixed(1)}%)
+                        </p>
+                      ) : (
+                        <p className="compare-ocr-note">
+                          {calcSkillId
+                            ? 'Fill in the new relic\u2019s main stat and all substats to see its damage impact.'
+                            : 'Open the Damage Calculator and pick a skill to see this relic\u2019s damage impact.'}
+                        </p>
+                      )}
 
                       <button
                         type="button"

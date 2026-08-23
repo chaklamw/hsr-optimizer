@@ -98,5 +98,47 @@
       }
     ],
     "extractedAt": "2026-08-23T15:36:26.609Z"
+  },
+  "48458c6667323fec9f4df52d6289636f10c1b9b27f91f4ef6f46be53b8016464": {
+    "characterName": "Sparxie",
+    "conditionals": [
+      {
+        "name": "Engagement Farming DMG Bonus",
+        "appliesToAbility": "BASIC",
+        "statType": "DMG_PERCENT",
+        "trigger": "for every instance of Engagement Farming triggered",
+        "valuesByStack": [
+          25
+        ],
+        "maxStacks": 1,
+        "suspicious": false,
+        "suspiciousNote": ""
+      },
+      {
+        "name": "Bloom! Winner Takes All DMG Boost (designated enemy)",
+        "appliesToAbility": "SKILL",
+        "statType": "DMG_PERCENT",
+        "trigger": "when skill is used",
+        "valuesByStack": [
+          25
+        ],
+        "maxStacks": 1,
+        "suspicious": false,
+        "suspiciousNote": ""
+      },
+      {
+        "name": "Bloom! Winner Takes All DMG Boost (adjacent targets)",
+        "appliesToAbility": "SKILL",
+        "statType": "DMG_PERCENT",
+        "trigger": "when skill is used",
+        "valuesByStack": [
+          12.5
+        ],
+        "maxStacks": 1,
+        "suspicious": false,
+        "suspiciousNote": ""
+      }
+    ],
+    "extractedAt": "2026-08-23T16:04:18.635Z"
   }
 }
