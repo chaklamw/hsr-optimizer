@@ -40,5 +40,63 @@
       }
     ],
     "extractedAt": "2026-08-23T06:35:29.151Z"
+  },
+  "d2b8aee93c75c941385129d6cbbf6461ee86aa2050932ca812c4cfb813db27c6": {
+    "characterName": "Castorice",
+    "conditionals": [
+      {
+        "name": "Decreases all enemies' All-Type RES by 25%",
+        "appliesToAbility": "ALL",
+        "statType": "RES_PEN",
+        "trigger": "always active while Territory 'Lost Netherland' is deployed",
+        "valuesByStack": [
+          25
+        ],
+        "maxStacks": 1,
+        "suspicious": false,
+        "suspiciousNote": ""
+      },
+      {
+        "name": "Newbud Damage Boost",
+        "appliesToAbility": "ALL",
+        "statType": "DMG_PERCENT",
+        "trigger": "Allies lose HP, each point adds 1 stack of 25% DMG to Castorice and Netherwing, up to 3 stacks, lasting 3 turns",
+        "valuesByStack": [
+          25,
+          50,
+          75
+        ],
+        "maxStacks": 3,
+        "suspicious": false,
+        "suspiciousNote": ""
+      },
+      {
+        "name": "Breath Scorches the Shadow DMG Multiplier Stack",
+        "appliesToAbility": "SKILL",
+        "statType": "DMG_PERCENT",
+        "trigger": "Each successive cast increases the DMG multiplier up to 47.6%",
+        "valuesByStack": [
+          33.6,
+          39.2,
+          47.6
+        ],
+        "maxStacks": 3,
+        "suspicious": false,
+        "suspiciousNote": ""
+      },
+      {
+        "name": "Netherwing DMG Boost",
+        "appliesToAbility": "ALL",
+        "statType": "DMG_PERCENT",
+        "trigger": "Netherwing summoned",
+        "valuesByStack": [
+          10
+        ],
+        "maxStacks": 1,
+        "suspicious": false,
+        "suspiciousNote": ""
+      }
+    ],
+    "extractedAt": "2026-08-23T15:36:26.609Z"
   }
 }

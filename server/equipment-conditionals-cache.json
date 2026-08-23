@@ -47,5 +47,42 @@
       }
     ],
     "extractedAt": "2026-08-23T06:36:07.824Z"
+  },
+  "877f5182d18c1d45ddef61ca54de0a71961101b0b9f2d30ec052f76df1664dc0": {
+    "sourceType": "Light Cone Passive",
+    "conditionals": [
+      {
+        "name": "Death Flower DEF Penalty",
+        "appliesToAbility": "ALL",
+        "statType": "DEF_PEN",
+        "trigger": "When the wearer or their memosprite loses HP during their own turn, the wearer gains \"Death Flower\" which allows the wearer and their memosprite to ignore 30% of the target's DEF when dealing damage, lasting for 2 turns.",
+        "valuesByStack": [
+          30
+        ],
+        "maxStacks": 1,
+        "suspicious": false,
+        "suspiciousNote": ""
+      }
+    ],
+    "extractedAt": "2026-08-23T15:36:39.780Z"
+  },
+  "0ecdd0b02f1781fed7542cf78e3f42e1b3c0538198808a71ce2a52980fbad3a8": {
+    "sourceType": "Relic Set (4pc)",
+    "conditionals": [
+      {
+        "name": "SPD-based Crit Rate Boost",
+        "appliesToAbility": "ALL",
+        "statType": "CRIT_RATE",
+        "trigger": "Tier 1: SPD < 110 -> +20% CRIT Rate. Tier 2 (stricter): SPD < 95 -> +32% CRIT Rate",
+        "valuesByStack": [
+          20,
+          32
+        ],
+        "maxStacks": 2,
+        "suspicious": false,
+        "suspiciousNote": ""
+      }
+    ],
+    "extractedAt": "2026-08-23T15:36:53.555Z"
   }
 }

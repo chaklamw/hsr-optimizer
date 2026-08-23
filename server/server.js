@@ -394,11 +394,48 @@ app.get('/api/hsr/:uid', async (req, res) => {
   res.json(data);
 });
 
+// Scaling stat / damage type classification is a pure function of the
+// skill's own description text — same skill text always means the same
+// correct answer, and the text only changes on a novaflare/rework. Unlike
+// the conditionals endpoints, this one already takes just a single
+// description string with no character/equipment split to worry about,
+// so one flat cache keyed on hash(description) covers it.
+const SKILL_INTERPRETATION_CACHE_PATH = path.join(__dirname, 'skill-interpretation-cache.json');
+
+function loadSkillInterpretationCache() {
+  try {
+    return JSON.parse(fs.readFileSync(SKILL_INTERPRETATION_CACHE_PATH, 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+function saveSkillInterpretationCache(cache) {
+  try {
+    fs.writeFileSync(SKILL_INTERPRETATION_CACHE_PATH, JSON.stringify(cache, null, 2));
+  } catch (err) {
+    console.log('Failed to write skill interpretation cache:', err.message);
+  }
+}
+
+function hashSkillDescription(description) {
+  return crypto.createHash('sha256').update(description).digest('hex');
+}
+
 app.post('/api/interpret-skill', async (req, res) => {
-  const { description } = req.body;
+  const { description, forceRefresh } = req.body;
 
   if (!description || typeof description !== 'string') {
     res.status(400).json({ error: 'Missing "description" string in request body' });
+    return;
+  }
+
+  const cacheKey = hashSkillDescription(description);
+  const skillCache = loadSkillInterpretationCache();
+
+  if (!forceRefresh && skillCache[cacheKey]) {
+    console.log(`Skill interpretation cache hit (${cacheKey.slice(0, 8)})`);
+    res.json({ ...skillCache[cacheKey].result, cached: true });
     return;
   }
 
@@ -438,7 +475,11 @@ Second, if the damage type is STANDARD, determine which single stat the skill's 
       return;
     }
 
-    res.json({ damageType: parsed.damageType, scalingStat: parsed.scalingStat });
+    const skillResult = { damageType: parsed.damageType, scalingStat: parsed.scalingStat };
+    skillCache[cacheKey] = { result: skillResult, extractedAt: new Date().toISOString() };
+    saveSkillInterpretationCache(skillCache);
+
+    res.json({ ...skillResult, cached: false });
   } catch (err) {
     console.log('Error calling Groq:', err);
     res.status(500).json({ error: 'Failed to interpret skill' });

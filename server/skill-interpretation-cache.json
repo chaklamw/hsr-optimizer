@@ -1,0 +1,16 @@
+{
+  "5783b97f645d48665b10f0727614d50c803c26d7d7bf2be6e63e03dd617d717e": {
+    "result": {
+      "damageType": "ELATION",
+      "scalingStat": "NONE"
+    },
+    "extractedAt": "2026-08-23T15:29:12.124Z"
+  },
+  "8c63de129165e4f9958af9245929ebfe307dc0cfce8a9884bc5249964df3f8f0": {
+    "result": {
+      "damageType": "STANDARD",
+      "scalingStat": "HP"
+    },
+    "extractedAt": "2026-08-23T15:30:40.980Z"
+  }
+}
