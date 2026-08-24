@@ -1,23 +1,18 @@
 {
-  "5783b97f645d48665b10f0727614d50c803c26d7d7bf2be6e63e03dd617d717e": {
-    "result": {
-      "damageType": "ELATION",
-      "scalingStat": "NONE"
-    },
-    "extractedAt": "2026-08-23T15:29:12.124Z"
-  },
   "8c63de129165e4f9958af9245929ebfe307dc0cfce8a9884bc5249964df3f8f0": {
     "result": {
       "damageType": "STANDARD",
-      "scalingStat": "HP"
+      "scalingStat": "HP",
+      "damageSourceName": null
     },
-    "extractedAt": "2026-08-23T15:30:40.980Z"
+    "extractedAt": "2026-08-24T19:20:49.140Z"
   },
-  "d56591b695d99ce98caa20969c05e285e34855248974cc4a4afb328a47ce90d1": {
+  "8b94a21cd133214149b74d16be8ba80210b763731b203436de4c474aa37e2975": {
     "result": {
-      "damageType": "ELATION",
-      "scalingStat": "NONE"
+      "damageType": "STANDARD",
+      "scalingStat": "HP",
+      "damageSourceName": null
     },
-    "extractedAt": "2026-08-23T16:02:07.935Z"
+    "extractedAt": "2026-08-24T19:20:54.609Z"
   }
 }

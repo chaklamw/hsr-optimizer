@@ -1,51 +1,9 @@
 {
-  "540ee43a5d818da7d79fcfa68fc35c03d5a8d348e7b3c086be55a2bba337fe0b": {
-    "characterName": "Yao Guang",
-    "conditionals": [
-      {
-        "name": "Great Boon Trigger",
-        "appliesToAbility": "ALL",
-        "statType": "DMG_PERCENT",
-        "trigger": "After an ally target uses an attack while Yao Guang holds Certified Banger",
-        "valuesByStack": [
-          25
-        ],
-        "maxStacks": 1,
-        "suspicious": false,
-        "suspiciousNote": ""
-      },
-      {
-        "name": "Great Boon Trigger (Skill Point)",
-        "appliesToAbility": "ALL",
-        "statType": "DMG_PERCENT",
-        "trigger": "After an ally target uses an attack that consumes Skill Points while Yao Guang holds Certified Banger",
-        "valuesByStack": [
-          25
-        ],
-        "maxStacks": 1,
-        "suspicious": false,
-        "suspiciousNote": ""
-      },
-      {
-        "name": "Woe's Whisper Vulnerability",
-        "appliesToAbility": "ALL",
-        "statType": "VULNERABILITY",
-        "trigger": "always active while Woe's Whisper is active",
-        "valuesByStack": [
-          16
-        ],
-        "maxStacks": 1,
-        "suspicious": false,
-        "suspiciousNote": ""
-      }
-    ],
-    "extractedAt": "2026-08-23T06:35:29.151Z"
-  },
   "d2b8aee93c75c941385129d6cbbf6461ee86aa2050932ca812c4cfb813db27c6": {
     "characterName": "Castorice",
     "conditionals": [
       {
-        "name": "Decreases all enemies' All-Type RES by 25%",
+        "name": "Lost Netherland RES Reduction",
         "appliesToAbility": "ALL",
         "statType": "RES_PEN",
         "trigger": "always active while Territory 'Lost Netherland' is deployed",
@@ -53,39 +11,42 @@
           25
         ],
         "maxStacks": 1,
+        "overflow": null,
         "suspicious": false,
         "suspiciousNote": ""
       },
       {
-        "name": "Newbud Damage Boost",
+        "name": "Allies HP Loss DMG Boost",
         "appliesToAbility": "ALL",
         "statType": "DMG_PERCENT",
-        "trigger": "Allies lose HP, each point adds 1 stack of 25% DMG to Castorice and Netherwing, up to 3 stacks, lasting 3 turns",
+        "trigger": "Allies lose HP",
         "valuesByStack": [
           25,
           50,
           75
         ],
         "maxStacks": 3,
+        "overflow": null,
         "suspicious": false,
         "suspiciousNote": ""
       },
       {
-        "name": "Breath Scorches the Shadow DMG Multiplier Stack",
+        "name": "Breath Scorches the Shadow DMG Multiplier Increase",
         "appliesToAbility": "SKILL",
         "statType": "DMG_PERCENT",
-        "trigger": "Each successive cast increases the DMG multiplier up to 47.6%",
+        "trigger": "Each successive cast increases DMG multiplier, up to 3 casts",
         "valuesByStack": [
           33.6,
           39.2,
           47.6
         ],
         "maxStacks": 3,
+        "overflow": null,
         "suspicious": false,
         "suspiciousNote": ""
       },
       {
-        "name": "Netherwing DMG Boost",
+        "name": "Netherwing Summon DMG Boost",
         "appliesToAbility": "ALL",
         "statType": "DMG_PERCENT",
         "trigger": "Netherwing summoned",
@@ -93,52 +54,11 @@
           10
         ],
         "maxStacks": 1,
+        "overflow": null,
         "suspicious": false,
         "suspiciousNote": ""
       }
     ],
-    "extractedAt": "2026-08-23T15:36:26.609Z"
-  },
-  "48458c6667323fec9f4df52d6289636f10c1b9b27f91f4ef6f46be53b8016464": {
-    "characterName": "Sparxie",
-    "conditionals": [
-      {
-        "name": "Engagement Farming DMG Bonus",
-        "appliesToAbility": "BASIC",
-        "statType": "DMG_PERCENT",
-        "trigger": "for every instance of Engagement Farming triggered",
-        "valuesByStack": [
-          25
-        ],
-        "maxStacks": 1,
-        "suspicious": false,
-        "suspiciousNote": ""
-      },
-      {
-        "name": "Bloom! Winner Takes All DMG Boost (designated enemy)",
-        "appliesToAbility": "SKILL",
-        "statType": "DMG_PERCENT",
-        "trigger": "when skill is used",
-        "valuesByStack": [
-          25
-        ],
-        "maxStacks": 1,
-        "suspicious": false,
-        "suspiciousNote": ""
-      },
-      {
-        "name": "Bloom! Winner Takes All DMG Boost (adjacent targets)",
-        "appliesToAbility": "SKILL",
-        "statType": "DMG_PERCENT",
-        "trigger": "when skill is used",
-        "valuesByStack": [
-          12.5
-        ],
-        "maxStacks": 1,
-        "suspicious": false,
-        "suspiciousNote": ""
-      }
-    ],
-    "extractedAt": "2026-08-23T16:04:18.635Z"
+    "extractedAt": "2026-08-24T19:18:43.400Z"
   }
 }

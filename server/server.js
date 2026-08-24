@@ -149,8 +149,13 @@ const VALID_STAT_TYPES = new Set([
   'DEF_PEN',
   'RES_PEN',
   'VULNERABILITY',
+  'STAT_OVERFLOW_SPLIT',
   'OTHER',
 ]);
+// Sub-stats an overflow-split effect's primary/secondary can target. Kept
+// narrower than VALID_STAT_TYPES since RES_PEN/DEF_PEN/VULNERABILITY are
+// enemy-facing, not something a character's own resource would fill.
+const VALID_OVERFLOW_STATS = new Set(['DMG_PERCENT', 'CRIT_RATE', 'CRIT_DMG', 'ATK_PERCENT']);
 const PERCENT_SANITY_CEILING = 500;
 
 function coercePercentNumber(v) {
@@ -174,9 +179,66 @@ function extractPercentNumbersFromText(text) {
   return matches.map((m) => Number(m.replace('%', '').trim())).filter((n) => Number.isFinite(n));
 }
 
+// STAT_OVERFLOW_SPLIT conditionals (resource points fill one stat until a
+// cap, then overflow into a second stat — see computeStatOverflowSplit on
+// the client) don't fit the valuesByStack shape at all, so they're
+// sanitized separately rather than being forced through the stacking
+// recovery logic that assumes a flat numeric array.
+function sanitizeOverflowSplit(overflow) {
+  if (!overflow || typeof overflow !== 'object') {
+    return { overflow: null, suspicious: true, suspiciousNote: 'STAT_OVERFLOW_SPLIT was missing its overflow details' };
+  }
+
+  let suspicious = false;
+  let suspiciousNote = '';
+
+  const primaryStat = VALID_OVERFLOW_STATS.has(overflow.primaryStat) ? overflow.primaryStat : null;
+  const secondaryStat = VALID_OVERFLOW_STATS.has(overflow.secondaryStat) ? overflow.secondaryStat : null;
+  if (!primaryStat || !secondaryStat) {
+    suspicious = true;
+    suspiciousNote = 'overflow split named an unrecognized stat — verify manually';
+  }
+
+  const primaryRatePerPoint = coercePercentNumber(overflow.primaryRatePerPoint);
+  const secondaryRatePerPoint = coercePercentNumber(overflow.secondaryRatePerPoint);
+  const capPercent = coercePercentNumber(overflow.capPercent);
+  const ratesLookValid =
+    primaryRatePerPoint !== null &&
+    Math.abs(primaryRatePerPoint) <= 50 &&
+    secondaryRatePerPoint !== null &&
+    Math.abs(secondaryRatePerPoint) <= 50 &&
+    capPercent !== null &&
+    capPercent > 0 &&
+    capPercent <= 1000;
+
+  if (!ratesLookValid) {
+    suspicious = true;
+    suspiciousNote = suspiciousNote || 'overflow split rates/cap looked implausible — verify manually';
+  }
+
+  return {
+    overflow: {
+      resourceLabel: typeof overflow.resourceLabel === 'string' ? overflow.resourceLabel.trim() : '',
+      primaryStat: primaryStat || 'CRIT_RATE',
+      primaryRatePerPoint: ratesLookValid ? primaryRatePerPoint : 0,
+      capPercent: ratesLookValid ? capPercent : 100,
+      secondaryStat: secondaryStat || 'CRIT_DMG',
+      secondaryRatePerPoint: ratesLookValid ? secondaryRatePerPoint : 0,
+    },
+    suspicious,
+    suspiciousNote,
+  };
+}
+
 function sanitizeConditionals(rawConditionals) {
   return rawConditionals
-    .filter((c) => c && typeof c.name === 'string' && c.name.trim() && Array.isArray(c.valuesByStack))
+    .filter(
+      (c) =>
+        c &&
+        typeof c.name === 'string' &&
+        c.name.trim() &&
+        (c.statType === 'STAT_OVERFLOW_SPLIT' || Array.isArray(c.valuesByStack))
+    )
     .map((c) => {
       let suspicious = false;
       let suspiciousNote = '';
@@ -186,6 +248,23 @@ function sanitizeConditionals(rawConditionals) {
 
       const statType = VALID_STAT_TYPES.has(c.statType) ? c.statType : 'OTHER';
       if (statType !== c.statType) suspicious = true;
+
+      const trigger = typeof c.trigger === 'string' ? c.trigger : '';
+
+      if (statType === 'STAT_OVERFLOW_SPLIT') {
+        const overflowResult = sanitizeOverflowSplit(c.overflow);
+        return {
+          name: c.name.trim(),
+          appliesToAbility,
+          statType,
+          trigger,
+          valuesByStack: [],
+          maxStacks: 0,
+          overflow: overflowResult.overflow,
+          suspicious: suspicious || overflowResult.suspicious,
+          suspiciousNote: suspiciousNote || overflowResult.suspiciousNote,
+        };
+      }
 
       let valuesByStack = c.valuesByStack.map((v) => {
         const num = coercePercentNumber(v);
@@ -229,8 +308,6 @@ function sanitizeConditionals(rawConditionals) {
         suspiciousNote = suspiciousNote || 'stack count was trimmed to match the values actually returned';
       }
 
-      const trigger = typeof c.trigger === 'string' ? c.trigger : '';
-
       return {
         name: c.name.trim(),
         appliesToAbility,
@@ -238,6 +315,7 @@ function sanitizeConditionals(rawConditionals) {
         trigger,
         valuesByStack,
         maxStacks,
+        overflow: null,
         suspicious,
         suspiciousNote,
       };
@@ -422,6 +500,24 @@ function hashSkillDescription(description) {
   return crypto.createHash('sha256').update(description).digest('hex');
 }
 
+// The gpt-oss-20b classification prompt asks the model to spot the literal
+// phrase "Elation DMG", but it's an easy miss when an elemental prefix sits
+// in front of it (e.g. "Imaginary Elation DMG") — the model tends to read
+// that as ordinary elemental damage and ignores the "Elation" qualifier.
+// Since "Elation DMG" is an unambiguous, literal substring whenever it
+// applies, a plain keyword check is more reliable than trusting the model
+// for this specific call, so it overrides the model's answer either way.
+// Applied to cache hits too, so an already-cached wrong classification
+// self-heals on the next request instead of staying wrong until the cache
+// entry is manually cleared.
+function applyElationOverride(description, result) {
+  const mentionsElation = /elation dmg/i.test(description);
+  if (mentionsElation && result.damageType !== 'ELATION') {
+    return { damageType: 'ELATION', scalingStat: 'NONE', damageSourceName: result.damageSourceName ?? null };
+  }
+  return result;
+}
+
 app.post('/api/interpret-skill', async (req, res) => {
   const { description, forceRefresh } = req.body;
 
@@ -435,7 +531,8 @@ app.post('/api/interpret-skill', async (req, res) => {
 
   if (!forceRefresh && skillCache[cacheKey]) {
     console.log(`Skill interpretation cache hit (${cacheKey.slice(0, 8)})`);
-    res.json({ ...skillCache[cacheKey].result, cached: true });
+    const cachedResult = applyElationOverride(description, skillCache[cacheKey].result);
+    res.json({ ...cachedResult, cached: true });
     return;
   }
 
@@ -445,13 +542,15 @@ app.post('/api/interpret-skill', async (req, res) => {
   }
 
   const systemPrompt = `You are extracting structured data from Honkai: Star Rail skill descriptions. Respond with ONLY a JSON object in this exact shape, no other text, no markdown formatting:
-{"damageType": "STANDARD" | "ELATION", "scalingStat": "ATK" | "DEF" | "HP" | "NONE"}`;
+{"damageType": "STANDARD" | "ELATION", "scalingStat": "ATK" | "DEF" | "HP" | "NONE", "damageSourceName": string | null}`;
 
   const userPrompt = `Skill description: "${description}"
 
-First, determine the damage type this skill deals: STANDARD or ELATION. ELATION applies only if the description explicitly says the skill deals Elation DMG (associated with the Path of Elation, Aha, Punchline, Certified Banger, or Merrymake). If there's no mention of Elation DMG, it's STANDARD.
+First, determine the damage type this skill deals: STANDARD or ELATION. ELATION applies only if the description explicitly says the skill deals Elation DMG (associated with the Path of Elation, Aha, Punchline, Certified Banger, or Merrymake) — this can appear with an elemental prefix in front of it (e.g. "Imaginary Elation DMG", "Quantum Elation DMG"); it's still Elation DMG even when a specific element is named alongside it. If there's no mention of Elation DMG, it's STANDARD.
 
-Second, if the damage type is STANDARD, determine which single stat the skill's damage or effect primarily scales from: ATK, DEF, or HP. If it scales from more than one, pick the one that contributes the most to its primary effect. If the skill doesn't scale from any of these three, respond with NONE. If the damage type is ELATION, respond with NONE for scalingStat, since Elation DMG doesn't scale from ATK, DEF, or HP.`;
+Second, if the damage type is STANDARD, determine which single stat the skill's damage or effect primarily scales from: ATK, DEF, or HP. If it scales from more than one, pick the one that contributes the most to its primary effect. If the skill doesn't scale from any of these three, respond with NONE. If the damage type is ELATION, respond with NONE for scalingStat, since Elation DMG doesn't scale from ATK, DEF, or HP.
+
+Third, check whether this ability's own action is actually what deals the damage. Some abilities set up a state, deploy a zone, or summon something — their own action doesn't deal damage — but the description also contains a separately, distinctly-named effect (usually in quotation marks, like "Top Loot Box") that deals the actual damage later, under its own separate trigger condition (e.g. gated by an ally's action, a percentage chance, or a summon's independent attack) rather than being dealt directly when this ability is used/cast. If such a differently-named damage-dealing effect exists, set damageSourceName to that effect's name exactly as written (e.g. "Top Loot Box"), even though damageType/scalingStat above should still describe that effect's own damage. If this ability's own action is what directly deals the damage when used — the normal case for most Basic ATK/Skill/Ultimate/Talent entries — set damageSourceName to null.`;
 
   try {
     const result = await callGroqJson({ systemPrompt, userPrompt });
@@ -475,7 +574,16 @@ Second, if the damage type is STANDARD, determine which single stat the skill's 
       return;
     }
 
-    const skillResult = { damageType: parsed.damageType, scalingStat: parsed.scalingStat };
+    const damageSourceName =
+      typeof parsed.damageSourceName === 'string' && parsed.damageSourceName.trim()
+        ? parsed.damageSourceName.trim()
+        : null;
+
+    const skillResult = applyElationOverride(description, {
+      damageType: parsed.damageType,
+      scalingStat: parsed.scalingStat,
+      damageSourceName,
+    });
     skillCache[cacheKey] = { result: skillResult, extractedAt: new Date().toISOString() };
     saveSkillInterpretationCache(skillCache);
 
@@ -487,7 +595,7 @@ Second, if the damage type is STANDARD, determine which single stat the skill's 
 });
 
 const CONDITIONAL_SYSTEM_PROMPT = `You are extracting structured conditional damage bonuses from a single Honkai: Star Rail ability description. Respond with ONLY a JSON object in this exact shape, no other text, no markdown formatting, no code fences:
-{"conditionals": [{"name": string, "appliesToAbility": string, "statType": string, "trigger": string, "valuesByStack": number[], "maxStacks": number}]}
+{"conditionals": [{"name": string, "appliesToAbility": string, "statType": string, "trigger": string, "valuesByStack": number[], "maxStacks": number, "overflow": {"resourceLabel": string, "primaryStat": string, "primaryRatePerPoint": number, "capPercent": number, "secondaryStat": string, "secondaryRatePerPoint": number} | null}]}
 If no qualifying conditional effects are found in this ability, respond with {"conditionals": []}.`;
 
 const CONDITIONAL_EXTRACTION_RULES = `Find any effects where the character's DMG (or a specific ability's DMG) increases conditionally — for example, stacking bonuses from repeated casts, threshold-based bonuses (e.g. "when HP is above/below X%"), or state-based bonuses. If an effect is worded as buffing "all allies," "the team," or similar, still extract it as applying to this character — the wearer/character being analyzed is a member of their own ally list and receives effects worded that way, even though the text doesn't say "the wearer" directly. Do not skip an effect just because it's phrased as team-wide support rather than self-targeted.
@@ -500,12 +608,14 @@ An effect scoped to an enemy state — "enemies with a debuff," "enemies with at
 
 Some effects list multiple mutually-exclusive threshold tiers using slash-separated values, e.g. "if SPD is less than 110/95, increases CRIT Rate by 20%/32%" (a weaker bonus at an easier threshold, a stronger bonus at a stricter threshold — only one applies at a time, not both). Represent these using valuesByStack the same way as ordinary stacks: valuesByStack: [20, 32], maxStacks: 2, with the trigger text explaining what each tier requires (e.g. "Tier 1: SPD < 110 -> +20% CRIT Rate. Tier 2 (stricter): SPD < 95 -> +32% CRIT Rate"). Do not skip this kind of effect just because it isn't literally "stacking" — picking a single tier value is exactly how this calculator already applies a selected value, so tiers fit the same structure.
 
+Some effects convert a per-point resource into TWO different stats via a dynamic threshold: the resource fills a primary stat at a fixed rate per point until that stat reaches a cap (usually 100%), and any remaining points switch to boosting a second stat instead (e.g. "Each point of X increases CRIT Rate by 0.4%. After CRIT Rate reaches 100%, each remaining point increases CRIT DMG by 0.8% instead."). This does NOT fit the valuesByStack shape, since the split point depends on the character's stat value from other sources, which can't be known in advance. For an effect shaped exactly like this: set statType to "STAT_OVERFLOW_SPLIT", set valuesByStack to [] and maxStacks to 0, and fill the "overflow" field instead: resourceLabel is the name of the resource being converted (e.g. "Punchline", or whatever the ability calls it); primaryStat and secondaryStat are each one of "DMG_PERCENT", "CRIT_RATE", "CRIT_DMG", "ATK_PERCENT" (primaryStat is whichever one fills first); primaryRatePerPoint and secondaryRatePerPoint are the percent gained per point (e.g. 0.4 and 0.8, not 0.004/0.008); capPercent is the value the primary stat must reach before overflow starts (usually 100, but use whatever the text actually says). For every other conditional, set "overflow" to null.
+
 For each conditional effect found, determine:
 - appliesToAbility: which ability type it affects — must be exactly one of "BASIC", "SKILL", "ULT", "FUA", "DOT", or "ALL" if it affects all of the character's damage. Use "ALL" for Talent/passive-sourced DMG Boosts that aren't scoped to one specific attack type — do not invent other category names.
-- statType: what it boosts — one of "DMG_PERCENT", "CRIT_RATE", "CRIT_DMG", "ATK_PERCENT", "DEF_PEN", "RES_PEN", "VULNERABILITY", or "OTHER" if none of these fit
+- statType: what it boosts — one of "DMG_PERCENT", "CRIT_RATE", "CRIT_DMG", "ATK_PERCENT", "DEF_PEN", "RES_PEN", "VULNERABILITY", "STAT_OVERFLOW_SPLIT" (see above), or "OTHER" if none of these fit
 - trigger: a short plain-English description of the condition
-- valuesByStack: an array of the bonus values in percent (e.g. 20 means +20%, not 0.2 and not 2000), indexed by stack count starting at 1 (e.g. [100, 200] means 1 stack = 100%, 2 stacks = 200%). If it's not stack-based but a single on/off condition, use a single-element array. The array length must exactly equal maxStacks. IMPORTANT: descriptions phrased as "+X% per stack, up to N stacks" are still cumulative and must be expanded to the full N-element array (e.g. "25% per stack, up to 3 stacks" -> valuesByStack: [25, 50, 75], maxStacks: 3) — never respond with just the single per-stack number. If the effect scales continuously (e.g. "+X% DMG per 1% Max HP lost, up to Y%") rather than in discrete stacks, represent only the minimum and maximum bound as a 2-element array with maxStacks 2, and say so in the trigger text — do not invent intermediate stack values.
-- maxStacks: the highest stack count reachable, or 1 if not stack-based. Must equal valuesByStack.length.`;
+- valuesByStack: an array of the bonus values in percent (e.g. 20 means +20%, not 0.2 and not 2000), indexed by stack count starting at 1 (e.g. [100, 200] means 1 stack = 100%, 2 stacks = 200%). If it's not stack-based but a single on/off condition, use a single-element array. The array length must exactly equal maxStacks. IMPORTANT: descriptions phrased as "+X% per stack, up to N stacks" are still cumulative and must be expanded to the full N-element array (e.g. "25% per stack, up to 3 stacks" -> valuesByStack: [25, 50, 75], maxStacks: 3) — never respond with just the single per-stack number. If the effect scales continuously (e.g. "+X% DMG per 1% Max HP lost, up to Y%") rather than in discrete stacks, represent only the minimum and maximum bound as a 2-element array with maxStacks 2, and say so in the trigger text — do not invent intermediate stack values. Leave this as [] for STAT_OVERFLOW_SPLIT effects (use the overflow field instead).
+- maxStacks: the highest stack count reachable, or 1 if not stack-based. Must equal valuesByStack.length. Use 0 for STAT_OVERFLOW_SPLIT effects.`;
 
 // Runs one ability's text through Groq and returns its raw (unsanitized)
 // conditionals. Shared by both the kit loop and the equipment loop so the

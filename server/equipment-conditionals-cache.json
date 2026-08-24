@@ -1,53 +1,4 @@
 {
-  "86df2c0787759bea7694f0d75ed689d1fa5968a3e787f0f4915fcef6ca4a04c1": {
-    "sourceType": "Light Cone Passive",
-    "conditionals": [
-      {
-        "name": "Great Fortune CRIT Rate",
-        "appliesToAbility": "ALL",
-        "statType": "CRIT_RATE",
-        "trigger": "While wearer holds Great Fortune (3 turns)",
-        "valuesByStack": [
-          10
-        ],
-        "maxStacks": 1,
-        "suspicious": false,
-        "suspiciousNote": ""
-      },
-      {
-        "name": "Great Fortune CRIT DMG",
-        "appliesToAbility": "ALL",
-        "statType": "CRIT_DMG",
-        "trigger": "While wearer holds Great Fortune (3 turns)",
-        "valuesByStack": [
-          30
-        ],
-        "maxStacks": 1,
-        "suspicious": false,
-        "suspiciousNote": ""
-      }
-    ],
-    "extractedAt": "2026-08-23T06:35:53.444Z"
-  },
-  "3ed410fe19601ec6d513777c1f78bffd45df77ea3274c0285096e53eff2061d8": {
-    "sourceType": "Relic Set (4pc)",
-    "conditionals": [
-      {
-        "name": "SPD-based Crit Rate Boost",
-        "appliesToAbility": "ALL",
-        "statType": "CRIT_RATE",
-        "trigger": "Tier 1: SPD >= 120 -> +10% CRIT Rate. Tier 2 (stricter): SPD >= 160 -> +18% CRIT Rate",
-        "valuesByStack": [
-          10,
-          18
-        ],
-        "maxStacks": 2,
-        "suspicious": false,
-        "suspiciousNote": ""
-      }
-    ],
-    "extractedAt": "2026-08-23T06:36:07.824Z"
-  },
   "877f5182d18c1d45ddef61ca54de0a71961101b0b9f2d30ec052f76df1664dc0": {
     "sourceType": "Light Cone Passive",
     "conditionals": [
@@ -55,22 +6,28 @@
         "name": "Death Flower DEF Penalty",
         "appliesToAbility": "ALL",
         "statType": "DEF_PEN",
-        "trigger": "When the wearer or their memosprite loses HP during their own turn, the wearer gains \"Death Flower\" which allows the wearer and their memosprite to ignore 30% of the target's DEF when dealing damage, lasting for 2 turns.",
+        "trigger": "Death Flower active (2 turns)",
         "valuesByStack": [
           30
         ],
         "maxStacks": 1,
+        "overflow": null,
         "suspicious": false,
         "suspiciousNote": ""
       }
     ],
-    "extractedAt": "2026-08-23T15:36:39.780Z"
+    "extractedAt": "2026-08-24T19:19:10.177Z"
+  },
+  "2c65ab17fa7704418deacd801ecf742060945408e1424c61253ff16ffe58cf09": {
+    "sourceType": "Relic Set (2pc)",
+    "conditionals": [],
+    "extractedAt": "2026-08-24T19:19:36.774Z"
   },
   "0ecdd0b02f1781fed7542cf78e3f42e1b3c0538198808a71ce2a52980fbad3a8": {
     "sourceType": "Relic Set (4pc)",
     "conditionals": [
       {
-        "name": "SPD-based Crit Rate Boost",
+        "name": "Poet of Mourning Collapse (4pc) SPD-based Crit Rate Boost",
         "appliesToAbility": "ALL",
         "statType": "CRIT_RATE",
         "trigger": "Tier 1: SPD < 110 -> +20% CRIT Rate. Tier 2 (stricter): SPD < 95 -> +32% CRIT Rate",
@@ -79,22 +36,18 @@
           32
         ],
         "maxStacks": 2,
+        "overflow": null,
         "suspicious": false,
         "suspiciousNote": ""
       }
     ],
-    "extractedAt": "2026-08-23T15:36:53.555Z"
-  },
-  "2c65ab17fa7704418deacd801ecf742060945408e1424c61253ff16ffe58cf09": {
-    "sourceType": "Relic Set (2pc)",
-    "conditionals": [],
-    "extractedAt": "2026-08-23T15:52:08.669Z"
+    "extractedAt": "2026-08-24T19:19:40.508Z"
   },
   "33c12695a08af1f7d4dc8948aa9ba16bbc86ad2067727cd7cf0949d1945fbf59": {
     "sourceType": "Relic Set (2pc)",
     "conditionals": [
       {
-        "name": "Max HP Threshold Crit DMG Boost",
+        "name": "Bone Collection's Serene Demesne (2pc) - Crit DMG Boost",
         "appliesToAbility": "ALL",
         "statType": "CRIT_DMG",
         "trigger": "wearer's Max HP is 5000 or higher",
@@ -102,81 +55,11 @@
           28
         ],
         "maxStacks": 1,
+        "overflow": null,
         "suspicious": false,
         "suspiciousNote": ""
       }
     ],
-    "extractedAt": "2026-08-23T15:52:09.638Z"
-  },
-  "1ef34cbb3c6687765be6d4a67bb5a52ff421e2c87f679f024a1a05d1696a99ad": {
-    "sourceType": "Light Cone Passive",
-    "conditionals": [
-      {
-        "name": "Elation DMG DEF Penalty",
-        "appliesToAbility": "ALL",
-        "statType": "DEF_PEN",
-        "trigger": "for each Skill Point consumed, up to 4 stacks",
-        "valuesByStack": [
-          5,
-          10,
-          15,
-          20
-        ],
-        "maxStacks": 4,
-        "suspicious": false,
-        "suspiciousNote": ""
-      }
-    ],
-    "extractedAt": "2026-08-23T16:04:43.342Z"
-  },
-  "21cea97fe45855b1fb5f770b9f8d9b8b0348509f00158ebdd491b6376d1a449c": {
-    "sourceType": "Relic Set (2pc)",
-    "conditionals": [],
-    "extractedAt": "2026-08-23T16:04:44.242Z"
-  },
-  "64d78fb7bf53bd65083a2abfb20005241105bf4a58a9af46e4cf5f94d2da009e": {
-    "sourceType": "Relic Set (4pc)",
-    "conditionals": [
-      {
-        "name": "Elation DMG DEF Penalty Stack",
-        "appliesToAbility": "ALL",
-        "statType": "DEF_PEN",
-        "trigger": "For every 5 accumulated Punchline allies gain",
-        "valuesByStack": [
-          1,
-          2,
-          3,
-          4,
-          5,
-          6,
-          7,
-          8,
-          9,
-          10
-        ],
-        "maxStacks": 10,
-        "suspicious": false,
-        "suspiciousNote": ""
-      }
-    ],
-    "extractedAt": "2026-08-23T16:05:07.690Z"
-  },
-  "815b8f167b9493b197b78c6a6bae36acf1454d340dbec25237c0505b3dfc055c": {
-    "sourceType": "Relic Set (2pc)",
-    "conditionals": [
-      {
-        "name": "Skill Point Threshold CRIT DMG Bonus",
-        "appliesToAbility": "ALL",
-        "statType": "CRIT_DMG",
-        "trigger": "If 3 or more Skill Points are consumed in the same turn",
-        "valuesByStack": [
-          32
-        ],
-        "maxStacks": 1,
-        "suspicious": false,
-        "suspiciousNote": ""
-      }
-    ],
-    "extractedAt": "2026-08-23T16:05:13.112Z"
+    "extractedAt": "2026-08-24T19:20:07.874Z"
   }
 }

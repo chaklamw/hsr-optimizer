@@ -180,9 +180,8 @@ function parseSubstatsFromText(rawText) {
 
       usedTypes.add(resolvedType);
       // Stored in human-readable display units (e.g. 4.3 for "4.3%", 42 for
-      // flat HP) — matches how the comparison form's manual entry works and
-      // is scored via scoreFormStatLine, not the fraction units relic._flat
-      // uses internally.
+      // flat HP) — matches how the comparison form's manual entry works,
+      // not the fraction units relic._flat uses internally.
       found.push({ type: resolvedType, value: String(value) });
       break;
     }
@@ -217,43 +216,6 @@ function parseMainStatFromText(rawText, mainOptions) {
   });
 
   return best ? { type: best.type, value: best.value } : null;
-}
-
-// Starting points for the relic comparison tool's weighting, expressed as
-// "value per 1 percentage point" for percent stats and "value per 1 point"
-// for flat stats. CRIT Rate/CRIT DMG follow the community-standard 2:1
-// Crit Value ratio. Everything else is a rough, adjustable starting
-// guess — there's no universal "correct" weight for stats like SPD or
-// ATK% since their real value depends on the specific character/build.
-const DEFAULT_WEIGHTS = {
-  HPDelta: 0.05,
-  AttackDelta: 0.05,
-  DefenceDelta: 0.05,
-  SpeedDelta: 2.5,
-  HPAddedRatio: 0.5,
-  AttackAddedRatio: 0.5,
-  DefenceAddedRatio: 0.5,
-  CriticalChanceBase: 2,
-  CriticalDamageBase: 1,
-  StatusProbabilityBase: 0.4,
-  StatusResistanceBase: 0.4,
-  BreakDamageAddedRatioBase: 0.3,
-};
-
-const WEIGHTS_STORAGE_KEY = 'hsr-showcase-relic-weights';
-
-function scoreStatLine(type, value, weights) {
-  const weight = weights[type] ?? 0;
-  if (FLAT_STAT_TYPES.has(type)) return value * weight;
-  return value * 100 * weight;
-}
-
-// Used for the relic comparison form (manual typing or OCR output), where
-// values are entered/extracted in human-readable display units (e.g. 10.7
-// for "10.7%", 42 for flat HP) — unlike relic._flat.props, which stores
-// percent stats as fractions (0.107). No *100 conversion needed here.
-function scoreFormStatLine(type, value, weights) {
-  return value * (weights[type] ?? 0);
 }
 
 function getMainStatOptions(relicMainAffixes, type) {
@@ -419,7 +381,7 @@ async function interpretSkill(description) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `Server responded ${res.status}`);
-  return { damageType: data.damageType, scalingStat: data.scalingStat };
+  return { damageType: data.damageType, scalingStat: data.scalingStat, damageSourceName: data.damageSourceName ?? null };
 }
 
 async function extractConditionals(characterName, abilities, forceRefresh = false) {
@@ -469,6 +431,16 @@ const STAT_TYPE_DESCRIPTIONS = {
   ATK_PERCENT: 'Increases ATK (only matters if the skill scales off ATK)',
   VULNERABILITY: 'Increases DMG the target takes from all sources',
   OTHER: "Doesn't map to a stat this calculator currently applies to damage",
+};
+
+// Compact names for STAT_OVERFLOW_SPLIT display (checkbox label, live
+// preview) — STAT_TYPE_DESCRIPTIONS above is too verbose ("Increases CRIT
+// Rate") for an inline "X% -> Y%" readout.
+const STAT_TYPE_SHORT_LABELS = {
+  DMG_PERCENT: 'DMG%',
+  CRIT_RATE: 'CRIT Rate',
+  CRIT_DMG: 'CRIT DMG',
+  ATK_PERCENT: 'ATK%',
 };
 
 function ConditionalHelpTooltip({ c }) {
@@ -684,9 +656,9 @@ function computeFinalStats(character, promotions, relicSets, skillTrees, lightCo
 // character.relicList (i.e. matching the `_flat.props` shape
 // computeFinalStats reads), out of the relic-compare form's main stat +
 // substats. Those form values are stored in human-readable display units
-// (e.g. 10.7 for "10.7%"), same as scoreFormStatLine expects, so percent
-// stat types need /100 to become the fraction units _flat.props uses
-// internally — flat stat types (HP/ATK/DEF/SPD Delta) are used as-is.
+// (e.g. 10.7 for "10.7%"), so percent stat types need /100 to become the
+// fraction units _flat.props uses internally — flat stat types (HP/ATK/
+// DEF/SPD Delta) are used as-is.
 //
 // Assumes the new relic keeps the same set as the piece it's replacing,
 // since the compare form has no way to specify a different set — swapping
@@ -714,6 +686,35 @@ function buildSyntheticRelic(slotType, setID, mainStat, substats) {
   return {
     type: slotType,
     _flat: { setID, props },
+  };
+}
+
+// Silver Wolf LV.999's "Hidden MMR" talent: on gaining Punchline, she gains
+// an equal amount of "Hidden MMR" — each point adds 0.4% CRIT Rate, until
+// CRIT Rate reaches 100%, after which remaining points switch to adding
+// 0.8% CRIT DMG instead. The split point depends on her CRIT Rate *before*
+// Hidden MMR is applied (gear + other conditionals), which isn't something
+// the AI kit-extraction prompt can know, so this is computed directly here
+// instead of going through the generic conditional-stacking schema.
+// Generic resource-to-stat overflow split: a per-point resource fills
+// `primaryStat` at `primaryRatePerPoint` per point until it reaches
+// `capPercent`, then remaining points fill `secondaryStat` at
+// `secondaryRatePerPoint` instead. The split point depends on the
+// character's own current value of the primary stat (from gear + other
+// conditionals), which isn't knowable from kit text alone, so this is
+// computed here rather than through the generic valuesByStack stacking
+// path. Driven entirely by an AI-extracted STAT_OVERFLOW_SPLIT
+// conditional (see server.js) instead of any character-specific
+// hardcoding — works for any character whose kit describes a mechanic
+// shaped like this, not just Silver Wolf LV.999.
+function computeStatOverflowSplit(basePrimaryStatPercent, resourcePoints, overflow) {
+  const points = Math.max(0, resourcePoints);
+  const pointsNeededToCap = Math.max(0, (overflow.capPercent - basePrimaryStatPercent) / overflow.primaryRatePerPoint);
+  const pointsToPrimary = Math.min(points, pointsNeededToCap);
+  const pointsToSecondary = Math.max(0, points - pointsToPrimary);
+  return {
+    primaryBonus: pointsToPrimary * overflow.primaryRatePerPoint,
+    secondaryBonus: pointsToSecondary * overflow.secondaryRatePerPoint,
   };
 }
 
@@ -745,6 +746,7 @@ function computeScenarioTotalDamage(stats, scenario) {
     calcMerrymakePercent,
     calcPunchlineValue,
     calcUsingCertifiedBanger,
+    calcUsingOverflowSplit,
     calcScalingStat,
     calcNonStatValue,
     calcStackingTriggers,
@@ -785,18 +787,51 @@ function computeScenarioTotalDamage(stats, scenario) {
       return sum + (c.valuesByStack[stacks - 1] || 0);
     }, 0);
 
-  const aiDmgPercent = sumConditionalStat('DMG_PERCENT');
+  let aiDmgPercent = sumConditionalStat('DMG_PERCENT');
   const aiResPenPercent = sumConditionalStat('RES_PEN');
   const aiDefPenPercent = sumConditionalStat('DEF_PEN');
   const aiVulnerabilityPercent = sumConditionalStat('VULNERABILITY');
   const aiCritRateBonus = sumConditionalStat('CRIT_RATE');
   const aiCritDmgBonus = sumConditionalStat('CRIT_DMG');
-  const aiAtkPercentBonus = sumConditionalStat('ATK_PERCENT');
+  let aiAtkPercentBonus = sumConditionalStat('ATK_PERCENT');
 
   const effectiveEnemyRes = calcEnemyRes - aiResPenPercent;
   const effectiveDefShred = calcDefShred + aiDefPenPercent;
-  const effectiveCritRatePercent = parseFloat(stats.critRate) + aiCritRateBonus;
-  const effectiveCritDmgPercent = parseFloat(stats.critDmg) + aiCritDmgBonus;
+  const baseCritRatePercent = parseFloat(stats.critRate) + aiCritRateBonus;
+  const baseCritDmgPercent = parseFloat(stats.critDmg) + aiCritDmgBonus;
+
+  // STAT_OVERFLOW_SPLIT conditionals (see server.js) are AI-extracted from
+  // this specific character's kit, so this only fires for characters whose
+  // kit actually describes a mechanic shaped like this — no
+  // character-name checks involved. The resource point count is read from
+  // the Punchline field since that's the only free-standing numeric
+  // "stack" input the Elation calculator currently exposes; a character
+  // whose overflow resource isn't Punchline-driven would need a dedicated
+  // input, which isn't built yet.
+  const overflowConditional = matchedAll.find((c) => c.statType === 'STAT_OVERFLOW_SPLIT' && c.overflow);
+  let overflowCritRateBonus = 0;
+  let overflowCritDmgBonus = 0;
+  if (calcUsingOverflowSplit && overflowConditional) {
+    const { overflow } = overflowConditional;
+    const baseValueByStat = {
+      CRIT_RATE: baseCritRatePercent,
+      CRIT_DMG: baseCritDmgPercent,
+      DMG_PERCENT: aiDmgPercent,
+      ATK_PERCENT: aiAtkPercentBonus,
+    };
+    const split = computeStatOverflowSplit(baseValueByStat[overflow.primaryStat] ?? 0, calcPunchlineValue, overflow);
+    const applyBonus = (statKey, bonus) => {
+      if (statKey === 'CRIT_RATE') overflowCritRateBonus += bonus;
+      else if (statKey === 'CRIT_DMG') overflowCritDmgBonus += bonus;
+      else if (statKey === 'DMG_PERCENT') aiDmgPercent += bonus;
+      else if (statKey === 'ATK_PERCENT') aiAtkPercentBonus += bonus;
+    };
+    applyBonus(overflow.primaryStat, split.primaryBonus);
+    applyBonus(overflow.secondaryStat, split.secondaryBonus);
+  }
+
+  const effectiveCritRatePercent = baseCritRatePercent + overflowCritRateBonus;
+  const effectiveCritDmgPercent = baseCritDmgPercent + overflowCritDmgBonus;
   const effectiveScalingValue =
     scalingKey === 'atk' && typeof scalingValue === 'number'
       ? scalingValue * (1 + aiAtkPercentBonus / 100)
@@ -883,6 +918,38 @@ function computeScenarioTotalDamage(stats, scenario) {
   return instancedHitTotal != null ? baseTotalDamage + instancedHitTotal : baseTotalDamage;
 }
 
+// Sums damage across a full rotation: each row supplies its own ability
+// selection (skillId/skillLevel/paramIndex/activationIndex) plus its
+// classification (damageType/scalingStat/nonStatValue) from that row's own
+// AI detection, while everything else (enemy config, Elation-wide fields,
+// AI/manual conditionals) is shared across the whole rotation via
+// `globalScenario`. Reuses computeScenarioTotalDamage as the per-row engine
+// rather than duplicating its math — a rotation is just that function
+// called once per row, multiplied by how many times that row occurs in one
+// rotation cycle, summed.
+function computeRotationTotalDamage(stats, rows, globalScenario) {
+  const perRow = rows.map((row) => {
+    const rowScenario = {
+      ...globalScenario,
+      calcSkillId: row.skillId,
+      calcSkillLevel: row.skillLevel,
+      calcActivationIndex: row.activationIndex,
+      calcParamIndex: row.paramIndex,
+      calcDamageType: row.damageType,
+      calcScalingStat: row.scalingStat,
+      calcNonStatValue: row.nonStatValue,
+    };
+    const perHit = computeScenarioTotalDamage(stats, rowScenario);
+    const rowTotal = perHit != null ? perHit * Math.max(0, row.countPerRotation) : null;
+    return { id: row.id, label: row.label, perHit, count: row.countPerRotation, rowTotal };
+  });
+
+  const validRows = perRow.filter((r) => r.rowTotal != null);
+  const total = validRows.length > 0 ? validRows.reduce((sum, r) => sum + r.rowTotal, 0) : null;
+
+  return { total, perRow };
+}
+
 export default function ProfilePage() {
   const { uid } = useParams();
   const [data, setData] = useState(null);
@@ -907,29 +974,20 @@ export default function ProfilePage() {
     { type: '', value: '' },
     { type: '', value: '' },
   ]);
-  const [weights, setWeights] = useState(DEFAULT_WEIGHTS);
-  const [showWeights, setShowWeights] = useState(false);
   const [ocrStatus, setOcrStatus] = useState('idle');
   const [ocrPreviewUrl, setOcrPreviewUrl] = useState(null);
   const [isDraggingImage, setIsDraggingImage] = useState(false);
   const [showDamageCalc, setShowDamageCalc] = useState(false);
-  const [calcSkillId, setCalcSkillId] = useState('');
-  const [calcSkillLevel, setCalcSkillLevel] = useState(1);
+  const [rotationRows, setRotationRows] = useState([]);
   const [calcEnemyLevel, setCalcEnemyLevel] = useState(95);
   const [calcEnemyRes, setCalcEnemyRes] = useState(0);
   const [calcDefShred, setCalcDefShred] = useState(0);
-  const [calcScalingStat, setCalcScalingStat] = useState('');
-  const [calcScalingStatus, setCalcScalingStatus] = useState('idle');
-  const [calcScalingError, setCalcScalingError] = useState('');
-  const [calcNonStatValue, setCalcNonStatValue] = useState(0);
-  const [calcDamageType, setCalcDamageType] = useState(DamageType.STANDARD);
   const [calcPunchlineValue, setCalcPunchlineValue] = useState(0);
   const [calcUsingCertifiedBanger, setCalcUsingCertifiedBanger] = useState(false);
+  const [calcUsingOverflowSplit, setCalcUsingOverflowSplit] = useState(false);
   const [calcMerrymakePercent, setCalcMerrymakePercent] = useState(0);
-  const [calcParamIndex, setCalcParamIndex] = useState(0);
   const [calcEnemyCount, setCalcEnemyCount] = useState(1);
   const [calcEnemyBroken, setCalcEnemyBroken] = useState(true);
-  const [calcActivationIndex, setCalcActivationIndex] = useState(0);
   const [calcStackingTriggers, setCalcStackingTriggers] = useState(0);
   const [aiConditionals, setAiConditionals] = useState([]);
   const [manualConditionals, setManualConditionals] = useState([]);
@@ -945,25 +1003,6 @@ export default function ProfilePage() {
   const [aiConditionalCached, setAiConditionalCached] = useState(false);
   const cardRefs = useRef({});
   const trackRef = useRef(null);
-
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(WEIGHTS_STORAGE_KEY);
-      if (saved) setWeights({ ...DEFAULT_WEIGHTS, ...JSON.parse(saved) });
-    } catch {
-      // ignore corrupt/missing localStorage data, defaults already in state
-    }
-  }, []);
-
-  function updateWeight(type, value) {
-    const next = { ...weights, [type]: value };
-    setWeights(next);
-    try {
-      localStorage.setItem(WEIGHTS_STORAGE_KEY, JSON.stringify(next));
-    } catch {
-      // ignore storage errors (e.g. private browsing quota)
-    }
-  }
 
   useEffect(() => {
     if (compareSlot == null) return;
@@ -1108,28 +1147,21 @@ export default function ProfilePage() {
     }
   }
 
-  function handleCalcLevelChange(level) {
-    // Level only changes the skill's numeric param values, never its
-    // scaling stat or damage type — no need to re-run detection against
-    // Groq for something level-invariant.
-    setCalcSkillLevel(level);
+  function makeRotationRowId() {
+    return `row-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   }
 
-  async function handleCalcSkillChange(skillId, level) {
-    setCalcSkillId(skillId);
-    setCalcSkillLevel(level);
-    setCalcScalingStat('');
-    setCalcDamageType(DamageType.STANDARD);
-    setCalcNonStatValue(0);
-    setCalcParamIndex(0);
-    setCalcEnemyCount(1);
-    setCalcActivationIndex(0);
-    setCalcStackingTriggers(0);
-    setCalcPunchlineValue(0);
-    setCalcUsingCertifiedBanger(false);
-    setCalcMerrymakePercent(0);
-    setAiConditionalStacks({});
+  function updateRotationRow(id, patch) {
+    setRotationRows((rows) => rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  }
 
+  // Runs the same per-ability classification used by the old single-ability
+  // calculator (damageType/scalingStat, plus damageSourceName for abilities
+  // whose own action doesn't deal the damage — e.g. a Zone-deploy Ultimate
+  // whose actual DMG comes from a separately-named, separately-triggered
+  // effect like "Top Loot Box"). Runs per row rather than once globally,
+  // since a rotation can mix abilities with different damage types.
+  async function detectRowScaling(id, skillId, level) {
     const skill = characterSkills[skillId];
     if (!skill) return;
 
@@ -1137,22 +1169,88 @@ export default function ProfilePage() {
     if (!resolvedDesc) return;
 
     if (getNonStatScalingLabel(resolvedDesc)) {
-      setCalcScalingStatus('idle');
+      updateRotationRow(id, { scalingStatus: 'idle' });
       return;
     }
 
-    setCalcScalingStatus('loading');
-    setCalcScalingError('');
+    updateRotationRow(id, { scalingStatus: 'loading', scalingError: '' });
     try {
-      const { damageType, scalingStat } = await interpretSkill(resolvedDesc);
-      setCalcDamageType(damageType === 'ELATION' ? DamageType.ELATION : DamageType.STANDARD);
-      setCalcScalingStat(scalingStat === 'NONE' ? '' : scalingStat);
-      setCalcScalingStatus('done');
+      const { damageType, scalingStat, damageSourceName } = await interpretSkill(resolvedDesc);
+      setRotationRows((rows) =>
+        rows.map((r) =>
+          r.id === id
+            ? {
+                ...r,
+                damageType: damageType === 'ELATION' ? DamageType.ELATION : DamageType.STANDARD,
+                scalingStat: scalingStat === 'NONE' ? '' : scalingStat,
+                damageSourceName: damageSourceName || null,
+                // Adopt the detected source name as the row's display label
+                // (e.g. "Ultimate" -> "Top Loot Box") unless the person has
+                // already typed their own label for this row.
+                label: !r.labelIsCustom && damageSourceName ? damageSourceName : r.label,
+                scalingStatus: 'done',
+              }
+            : r
+        )
+      );
     } catch (err) {
       console.error('Skill scaling detection failed:', err);
-      setCalcScalingStatus('error');
-      setCalcScalingError(err.message || 'Failed to reach the detection service.');
+      updateRotationRow(id, { scalingStatus: 'error', scalingError: err.message || 'Failed to reach the detection service.' });
     }
+  }
+
+  function addRotationRow(skillId) {
+    const skill = characterSkills[skillId];
+    const id = makeRotationRowId();
+    const level = skill?.max_level || 1;
+    const newRow = {
+      id,
+      skillId,
+      skillLevel: level,
+      paramIndex: 0,
+      activationIndex: 0,
+      countPerRotation: 1,
+      label: skill?.name || '',
+      labelIsCustom: false,
+      damageType: DamageType.STANDARD,
+      scalingStat: '',
+      scalingStatus: 'idle',
+      scalingError: '',
+      nonStatValue: 0,
+      damageSourceName: null,
+    };
+    setRotationRows((rows) => [...rows, newRow]);
+    detectRowScaling(id, skillId, level);
+  }
+
+  function removeRotationRow(id) {
+    setRotationRows((rows) => rows.filter((r) => r.id !== id));
+  }
+
+  function handleRotationRowSkillChange(id, skillId) {
+    const skill = characterSkills[skillId];
+    const level = skill?.max_level || 1;
+    updateRotationRow(id, {
+      skillId,
+      skillLevel: level,
+      paramIndex: 0,
+      activationIndex: 0,
+      label: skill?.name || '',
+      labelIsCustom: false,
+      damageType: DamageType.STANDARD,
+      scalingStat: '',
+      scalingStatus: 'idle',
+      nonStatValue: 0,
+      damageSourceName: null,
+    });
+    detectRowScaling(id, skillId, level);
+  }
+
+  function handleRotationRowLevelChange(id, level) {
+    // Level only changes the skill's numeric param values, never its
+    // scaling stat or damage type — no need to re-run detection against
+    // Groq for something level-invariant.
+    updateRotationRow(id, { skillLevel: level });
   }
 
   useEffect(() => {
@@ -1387,12 +1485,7 @@ export default function ProfilePage() {
                     <button
                       type="button"
                       className="damage-calc-btn"
-                      onClick={() => {
-                        setShowDamageCalc(true);
-                        setCalcSkillId('');
-                        setCalcScalingStat('');
-                        setCalcScalingStatus('idle');
-                      }}
+                      onClick={() => setShowDamageCalc(true)}
                     >
                       Damage Calculator
                     </button>
@@ -1496,34 +1589,20 @@ export default function ProfilePage() {
                   [compareMainStat.type, ...compareSubstats.map((s) => s.type)].filter(Boolean)
                 );
 
-                const equippedScore =
-                  scoreStatLine(eqMain.type, eqMain.value, weights) +
-                  eqSubs.reduce((sum, s) => sum + scoreStatLine(s.type, s.value, weights), 0);
-
-                const newScore =
-                  (compareMainStat.type && compareMainStat.value !== ''
-                    ? scoreFormStatLine(compareMainStat.type, Number(compareMainStat.value), weights)
-                    : 0) +
-                  compareSubstats.reduce((sum, s) => {
-                    if (!s.type || s.value === '') return sum;
-                    return sum + scoreFormStatLine(s.type, Number(s.value), weights);
-                  }, 0);
-
                 // Damage-impact preview: recompute the character's full stat
                 // block with the new relic's stats swapped in for the
-                // equipped one at this slot, then re-run whatever
-                // ability/enemy/conditional config is currently set in the
-                // Damage Calculator against both stat blocks. Only possible
-                // once a skill has been picked there — calcSkillId lives in
-                // component state, so it persists even if that modal is
-                // closed.
+                // equipped one at this slot, then re-run the whole rotation
+                // (every row in rotationRows) against both stat blocks and
+                // diff the totals. rotationRows/enemy/conditional config all
+                // live in component state, so they persist even if the
+                // Damage Calculator modal itself is closed.
                 const newRelicFormComplete =
                   compareMainStat.type &&
                   compareMainStat.value !== '' &&
                   compareSubstats.every((s) => (s.type && s.value !== '') || (!s.type && s.value === ''));
 
                 let damageDelta = null;
-                if (calcSkillId && newRelicFormComplete) {
+                if (rotationRows.length > 0 && newRelicFormComplete) {
                   const syntheticRelic = buildSyntheticRelic(
                     compareSlot,
                     equippedRelic._flat.setID,
@@ -1541,25 +1620,19 @@ export default function ProfilePage() {
                     lightConeRanks
                   );
 
-                  const scenario = {
+                  const globalScenario = {
                     activeCharacter,
                     characterSkills,
                     skillIds: activeInfo?.skills || [],
-                    calcSkillId,
-                    calcSkillLevel,
-                    calcActivationIndex,
-                    calcParamIndex,
                     calcEnemyLevel,
                     calcEnemyRes,
                     calcDefShred,
                     calcEnemyCount,
                     calcEnemyBroken,
-                    calcDamageType,
                     calcMerrymakePercent,
                     calcPunchlineValue,
                     calcUsingCertifiedBanger,
-                    calcScalingStat,
-                    calcNonStatValue,
+                    calcUsingOverflowSplit,
                     calcStackingTriggers,
                     aiConditionals,
                     manualConditionals,
@@ -1567,8 +1640,10 @@ export default function ProfilePage() {
                     elementDmgType: ELEMENT_DMG_TYPE[activeInfo?.element],
                   };
 
-                  const equippedDamage = computeScenarioTotalDamage(activeStats, scenario);
-                  const newDamage = newStats ? computeScenarioTotalDamage(newStats, scenario) : null;
+                  const { total: equippedDamage } = computeRotationTotalDamage(activeStats, rotationRows, globalScenario);
+                  const { total: newDamage } = newStats
+                    ? computeRotationTotalDamage(newStats, rotationRows, globalScenario)
+                    : { total: null };
 
                   if (equippedDamage != null && newDamage != null) {
                     damageDelta = {
@@ -1609,9 +1684,6 @@ export default function ProfilePage() {
                               <li key={s.type}>{formatStat(s.type, s.value)}</li>
                             ))}
                           </ul>
-                          <p className="compare-score">
-                            Score: <strong>{equippedScore.toFixed(1)}</strong>
-                          </p>
                         </div>
 
                         <div className="compare-column">
@@ -1721,21 +1793,8 @@ export default function ProfilePage() {
                             </div>
                           ))}
 
-                          <p className="compare-score">
-                            Score: <strong>{newScore.toFixed(1)}</strong>
-                          </p>
                         </div>
                       </div>
-
-                      <p
-                        className={`compare-verdict ${
-                          newScore > equippedScore ? 'compare-verdict-win' : 'compare-verdict-lose'
-                        }`}
-                      >
-                        {newScore > equippedScore
-                          ? `New relic is better by ${(newScore - equippedScore).toFixed(1)}`
-                          : `Equipped relic is better by ${(equippedScore - newScore).toFixed(1)}`}
-                      </p>
 
                       {damageDelta ? (
                         <p
@@ -1751,34 +1810,10 @@ export default function ProfilePage() {
                         </p>
                       ) : (
                         <p className="compare-ocr-note">
-                          {calcSkillId
+                          {rotationRows.length > 0
                             ? 'Fill in the new relic\u2019s main stat and all substats to see its damage impact.'
-                            : 'Open the Damage Calculator and pick a skill to see this relic\u2019s damage impact.'}
+                            : 'Open the Damage Calculator and add a rotation to see this relic\u2019s damage impact.'}
                         </p>
-                      )}
-
-                      <button
-                        type="button"
-                        className="compare-weights-toggle"
-                        onClick={() => setShowWeights((v) => !v)}
-                      >
-                        {showWeights ? 'Hide' : 'Adjust'} stat weights
-                      </button>
-
-                      {showWeights && (
-                        <div className="compare-weights">
-                          {SUBSTAT_TYPES.map((type) => (
-                            <div className="compare-weight-row" key={type}>
-                              <span>{STAT_LABELS[type] || type}</span>
-                              <input
-                                type="number"
-                                step="0.1"
-                                value={weights[type] ?? 0}
-                                onChange={(e) => updateWeight(type, Number(e.target.value))}
-                              />
-                            </div>
-                          ))}
-                        </div>
                       )}
                     </div>
                   </div>
@@ -1787,6 +1822,7 @@ export default function ProfilePage() {
 
               {showDamageCalc && (() => {
                 const skillIds = characterNames[activeCharacter.avatarId]?.skills || [];
+                const selectableIds = skillIds.filter((id) => isSelectableAttack(characterSkills[id]));
 
                 // Some skills (e.g. Castorice's Memosprite Skill, castable
                 // up to 3 times with an escalating multiplier each time)
@@ -1794,109 +1830,31 @@ export default function ProfilePage() {
                 // same name and type_text — one per activation count,
                 // rather than one skill with a toggle. Group those
                 // together so the dropdown shows one entry, with a
-                // separate "Activation" selector for which cast to view.
-                const selectableIds = skillIds.filter((id) => isSelectableAttack(characterSkills[id]));
+                // separate "Activation" selector on the row for which
+                // cast to view.
                 const activationGroups = {};
                 selectableIds.forEach((id) => {
                   const s = characterSkills[id];
                   const key = `${s.name}__${s.type_text}`;
                   (activationGroups[key] = activationGroups[key] || []).push(id);
                 });
-                const selectedSkillKey = characterSkills[calcSkillId]
-                  ? `${characterSkills[calcSkillId].name}__${characterSkills[calcSkillId].type_text}`
-                  : null;
-                const activationVariantIds = selectedSkillKey ? activationGroups[selectedSkillKey] || [calcSkillId] : [calcSkillId];
-
-                // Always read from the first-listed variant — it's the
-                // one that carries real data (later entries are often
-                // just generic flavor text, as with Castorice's repeated
-                // memosprite casts). The count of variant IDs is still
-                // used as a signal that this skill has multiple casts.
-                const skill = characterSkills[activationVariantIds[0]];
-                const resolvedSkillDesc = skill ? formatLightConeDesc(skill.desc, skill.params[calcSkillLevel - 1]) : '';
-                const nonStatScalingLabel = getNonStatScalingLabel(resolvedSkillDesc);
-
-                const scalingKey = calcScalingStat ? calcScalingStat.toLowerCase() : '';
-                const scalingValue = nonStatScalingLabel
-                  ? calcNonStatValue
-                  : scalingKey && activeStats
-                    ? activeStats[scalingKey]
-                    : null;
+                const dedupedSelectableIds = [];
+                const seenGroupKeys = new Set();
+                selectableIds.forEach((id) => {
+                  const s = characterSkills[id];
+                  const key = `${s.name}__${s.type_text}`;
+                  if (seenGroupKeys.has(key)) return;
+                  seenGroupKeys.add(key);
+                  dedupedSelectableIds.push(id);
+                });
 
                 const elementDmgType = ELEMENT_DMG_TYPE[activeInfo?.element];
-                const elementalDmgPercent =
-                  elementDmgType && activeStats?.genericStats[elementDmgType]
-                    ? activeStats.genericStats[elementDmgType] * 100
-                    : 0;
-                const allDmgPercent = activeStats?.genericStats.AllDamageTypeAddedRatio
-                  ? activeStats.genericStats.AllDamageTypeAddedRatio * 100
-                  : 0;
-                const isElation = calcDamageType === DamageType.ELATION;
-                const elationPercent = activeStats?.genericStats.ElationDamageAddedRatio
-                  ? activeStats.genericStats.ElationDamageAddedRatio * 100
-                  : 0;
 
-                const matchedAiConditionals = skill
-                  ? aiConditionals.filter((c) => conditionalAppliesToSkill(c, skill.type_text))
-                  : [];
-                const matchedManualConditionals = skill
-                  ? manualConditionals.filter((c) => conditionalAppliesToSkill(c, skill.type_text))
-                  : [];
-                const matchedAllConditionals = [...matchedAiConditionals, ...matchedManualConditionals];
-                const sumConditionalStat = (statType) =>
-                  matchedAllConditionals.reduce((sum, c) => {
-                    if (c.statType !== statType) return sum;
-                    const stacks = aiConditionalStacks[c.name] || 0;
-                    return sum + (c.valuesByStack[stacks - 1] || 0);
-                  }, 0);
-
-                const aiDmgPercent = sumConditionalStat('DMG_PERCENT');
-                const aiResPenPercent = sumConditionalStat('RES_PEN');
-                const aiDefPenPercent = sumConditionalStat('DEF_PEN');
-                const aiVulnerabilityPercent = sumConditionalStat('VULNERABILITY');
-                const aiCritRateBonus = sumConditionalStat('CRIT_RATE');
-                const aiCritDmgBonus = sumConditionalStat('CRIT_DMG');
-                const aiAtkPercentBonus = sumConditionalStat('ATK_PERCENT');
-                const effectiveEnemyRes = calcEnemyRes - aiResPenPercent;
-                const effectiveDefShred = calcDefShred + aiDefPenPercent;
-                const effectiveCritRatePercent = parseFloat(activeStats.critRate) + aiCritRateBonus;
-                const effectiveCritDmgPercent = parseFloat(activeStats.critDmg) + aiCritDmgBonus;
-                // ATK_PERCENT conditionals only matter when the skill actually
-                // scales off ATK — applied on top of the already-computed total
-                // ATK (base + all other bonuses), which slightly overstates a
-                // buff meant to apply to base ATK only, but is a reasonable
-                // approximation consistent with how elementalDmgPercent etc.
-                // are already handled as flat additive percents in this calc.
-                const effectiveScalingValue =
-                  scalingKey === 'atk' && typeof scalingValue === 'number'
-                    ? scalingValue * (1 + aiAtkPercentBonus / 100)
-                    : scalingValue;
-
-                const levelParams = skill ? skill.params[calcSkillLevel - 1] || [] : [];
-                const damagePercentIndices = skill ? getDamagePercentParamIndices(skill.desc) : [];
-                // Fall back to just index 0 if the desc-parsing heuristic
-                // couldn't identify anything (better a single sane value
-                // than an empty selector).
-                const hitIndices = damagePercentIndices.length > 0 ? damagePercentIndices : [0];
-                const hasMultipleHitValues = hitIndices.length > 1;
-                const selectedHitIndex = hitIndices.includes(calcParamIndex) ? calcParamIndex : hitIndices[0];
-                const selectedHitTargetLabel =
-                  skill && (getHitTargetLabel(skill.desc, selectedHitIndex) || (selectedHitIndex === hitIndices[0] ? 'main target' : null));
-
-                const baseMultiplier = levelParams[selectedHitIndex];
-                const escalatingMultipliers = getEscalatingMultipliers(resolvedSkillDesc);
-                const activationMultipliers = escalatingMultipliers
-                  ? [baseMultiplier, ...escalatingMultipliers]
-                  : null;
-                const hasMultipleActivations = activationVariantIds.length > 1 && !!activationMultipliers;
-                const selectedActivationMultiplier = activationMultipliers
-                  ? activationMultipliers[calcActivationIndex] ?? activationMultipliers[0]
-                  : baseMultiplier;
-
-                // Cross-referenced per-hit stacking bonus (e.g. Sparxie's
-                // "Engagement Farming" boosting her main/adjacent hits by
-                // different amounts) — only relevant for Blast-style
-                // skills with distinct main/adjacent values.
+                // Character-wide (not per-row) detection of a cross-hit
+                // stacking mechanic — e.g. a Blast skill whose main/adjacent
+                // hits both get stronger with repeated triggers of some
+                // other ability. Independent of which rows are in the
+                // rotation right now.
                 const allAbilities = skillIds
                   .map((id) => characterSkills[id])
                   .filter(Boolean)
@@ -1905,81 +1863,100 @@ export default function ProfilePage() {
                     desc: formatLightConeDesc(s.desc, s.params[s.params.length - 1]) || s.desc || '',
                   }))
                   .filter((a) => a.desc);
-                const perHitStackingBonus = hasMultipleHitValues ? getPerHitTargetStackingBonus(allAbilities) : null;
-                const getStackingDmgPercent = (hitIdx) => {
-                  if (!perHitStackingBonus) return 0;
-                  const perStack = hitIdx === hitIndices[0] ? perHitStackingBonus.mainPerStack : perHitStackingBonus.adjacentPerStack;
-                  return perStack * calcStackingTriggers * 100;
-                };
+                const perHitStackingBonus = getPerHitTargetStackingBonus(allAbilities);
 
-                const computeHitDamage = (multiplierFraction, extraDmgPercent = 0) => {
-                  if (!skill) return null;
+                const allConditionals = [...aiConditionals, ...manualConditionals];
+                const overflowConditional = allConditionals.find(
+                  (c) => c.statType === 'STAT_OVERFLOW_SPLIT' && c.overflow
+                );
+                const hasElationRow = rotationRows.some((r) => r.damageType === DamageType.ELATION);
 
-                  const brokenMultiplier = calcEnemyBroken ? 1.0 : 0.9;
+                // Display-only estimate of effective enemy RES/DEF-shred —
+                // sums RES_PEN/DEF_PEN across every currently-added
+                // conditional regardless of which row(s) it actually
+                // applies to, since that per-row filtering already happens
+                // correctly inside computeScenarioTotalDamage itself.
+                const aiResPenPercent = allConditionals.reduce((sum, c) => {
+                  if (c.statType !== 'RES_PEN') return sum;
+                  const stacks = aiConditionalStacks[c.name] || 0;
+                  return sum + (c.valuesByStack[stacks - 1] || 0);
+                }, 0);
+                const aiDefPenPercent = allConditionals.reduce((sum, c) => {
+                  if (c.statType !== 'DEF_PEN') return sum;
+                  const stacks = aiConditionalStacks[c.name] || 0;
+                  return sum + (c.valuesByStack[stacks - 1] || 0);
+                }, 0);
+                const effectiveEnemyRes = calcEnemyRes - aiResPenPercent;
+                const effectiveDefShred = calcDefShred + aiDefPenPercent;
 
-                  if (isElation) {
-                    return computeElationDamage({
-                      abilityMultiplierPercent: (multiplierFraction || 0) * 100,
-                      characterLevel: activeCharacter.level,
-                      enemyLevel: calcEnemyLevel,
-                      elationPercent,
-                      merrymakePercent: calcMerrymakePercent,
-                      punchlineValue: calcPunchlineValue,
-                      usingCertifiedBanger: calcUsingCertifiedBanger,
-                      critRatePercent: effectiveCritRatePercent,
-                      critDmgPercent: effectiveCritDmgPercent,
-                      enemyResPercent: effectiveEnemyRes,
-                      defReductionPercent: effectiveDefShred,
-                      vulnerabilityPercent: aiVulnerabilityPercent,
-                      brokenMultiplier,
-                    });
-                  }
-
-                  return effectiveScalingValue != null
-                    ? computeDamage({
-                        scalingStatValue: effectiveScalingValue,
-                        skillMultiplierPercent: (multiplierFraction || 0) * 100,
-                        characterLevel: activeCharacter.level,
-                        enemyLevel: calcEnemyLevel,
-                        enemyResPercent: effectiveEnemyRes,
-                        defShredPercent: effectiveDefShred,
-                        elementalDmgPercent: elementalDmgPercent + allDmgPercent + aiDmgPercent + extraDmgPercent,
-                        critRatePercent: effectiveCritRatePercent,
-                        critDmgPercent: effectiveCritDmgPercent,
-                        vulnerabilityPercent: aiVulnerabilityPercent,
-                        brokenMultiplier,
-                      })
+                // Per-row derived info (which skill it resolves to, its
+                // level-resolved description, which damage-percent hit
+                // indices it has, whether it has escalating-cast
+                // variants) — mirrors what the old single-ability
+                // calculator computed once globally, scoped per row here
+                // since each row can be a different ability.
+                function getRowMeta(row) {
+                  const selectedSkillKey = characterSkills[row.skillId]
+                    ? `${characterSkills[row.skillId].name}__${characterSkills[row.skillId].type_text}`
                     : null;
+                  const activationVariantIds = selectedSkillKey
+                    ? activationGroups[selectedSkillKey] || [row.skillId]
+                    : [row.skillId];
+                  const skill = characterSkills[activationVariantIds[0]];
+                  const resolvedDesc = skill ? formatLightConeDesc(skill.desc, skill.params[row.skillLevel - 1]) : '';
+                  const nonStatScalingLabel = getNonStatScalingLabel(resolvedDesc);
+                  const damagePercentIndices = skill ? getDamagePercentParamIndices(skill.desc) : [];
+                  const hitIndices = damagePercentIndices.length > 0 ? damagePercentIndices : [0];
+                  const hasMultipleHitValues = hitIndices.length > 1;
+                  const selectedHitIndex = hitIndices.includes(row.paramIndex) ? row.paramIndex : hitIndices[0];
+                  const selectedHitTargetLabel =
+                    skill &&
+                    (getHitTargetLabel(skill.desc, selectedHitIndex) ||
+                      (selectedHitIndex === hitIndices[0] ? 'main target' : null));
+                  const levelParams = skill ? skill.params[row.skillLevel - 1] || [] : [];
+                  const baseMultiplier = levelParams[selectedHitIndex];
+                  const escalatingMultipliers = getEscalatingMultipliers(resolvedDesc);
+                  const activationMultipliers = escalatingMultipliers
+                    ? [baseMultiplier, ...escalatingMultipliers]
+                    : null;
+                  const hasMultipleActivations = activationVariantIds.length > 1 && !!activationMultipliers;
+
+                  return {
+                    skill,
+                    resolvedDesc,
+                    nonStatScalingLabel,
+                    hitIndices,
+                    hasMultipleHitValues,
+                    selectedHitIndex,
+                    selectedHitTargetLabel,
+                    activationMultipliers,
+                    hasMultipleActivations,
+                  };
+                }
+
+                const globalScenario = {
+                  activeCharacter,
+                  characterSkills,
+                  skillIds,
+                  calcEnemyLevel,
+                  calcEnemyRes,
+                  calcDefShred,
+                  calcEnemyCount,
+                  calcEnemyBroken,
+                  calcMerrymakePercent,
+                  calcPunchlineValue,
+                  calcUsingCertifiedBanger,
+                  calcUsingOverflowSplit,
+                  calcStackingTriggers,
+                  aiConditionals,
+                  manualConditionals,
+                  aiConditionalStacks,
+                  elementDmgType,
                 };
 
-                const damage = computeHitDamage(selectedActivationMultiplier, getStackingDmgPercent(selectedHitIndex));
-
-                const instancedHitInfo = getInstancedHitInfo(resolvedSkillDesc);
-                const instancedHitDamage = instancedHitInfo ? computeHitDamage(instancedHitInfo.perInstancePercent) : null;
-                const instancedHitTotal =
-                  instancedHitDamage != null ? instancedHitDamage * instancedHitInfo.instanceCount : null;
-
-                // Blast-style skills (main + adjacent) carry two different
-                // per-hit values, so the total across N enemies sums the
-                // main hit once plus the adjacent hit for the rest. Skills
-                // with just one qualifying damage value (including
-                // repeated-cast skills, which hit "all enemies" uniformly)
-                // multiply straight across the enemy count instead. Any
-                // instanced-hit component (a fixed number of extra
-                // instances stated in the text, independent of enemy
-                // count) is added on top either way.
-                const baseTotalDamage =
-                  damage == null
-                    ? null
-                    : hasMultipleHitValues
-                      ? (computeHitDamage(levelParams[hitIndices[0]], getStackingDmgPercent(hitIndices[0])) || 0) +
-                        (computeHitDamage(levelParams[hitIndices[1]], getStackingDmgPercent(hitIndices[1])) || 0) * Math.max(0, calcEnemyCount - 1)
-                      : damage * calcEnemyCount;
-
-                const totalDamage =
-                  baseTotalDamage != null && instancedHitTotal != null
-                    ? baseTotalDamage + instancedHitTotal
-                    : baseTotalDamage;
+                const { total: totalRotationDamage, perRow } = activeStats
+                  ? computeRotationTotalDamage(activeStats, rotationRows, globalScenario)
+                  : { total: null, perRow: [] };
 
                 return (
                   <div className="compare-overlay" onClick={() => setShowDamageCalc(false)}>
@@ -2030,299 +2007,226 @@ export default function ProfilePage() {
                         <p className="compare-ocr-note">No conditional bonuses detected in this character's ability text.</p>
                       )}
 
-                      <div className="compare-form-row">
-                        <select
-                          value={calcSkillId}
-                          onChange={(e) => {
-                            const id = e.target.value;
-                            const newSkill = characterSkills[id];
-                            handleCalcSkillChange(id, newSkill?.max_level || 1);
-                          }}
-                        >
-                          <option value="">Select a skill...</option>
-                          {(() => {
-                            const seenGroupKeys = new Set();
-                            return skillIds.map((id) => {
-                              const s = characterSkills[id];
-                              if (!isSelectableAttack(s)) return null;
-                              const key = `${s.name}__${s.type_text}`;
-                              if (seenGroupKeys.has(key)) return null;
-                              seenGroupKeys.add(key);
-                              return (
-                                <option key={id} value={id}>
-                                  {s.type_text ? `${s.type_text}: ` : ''}
-                                  {s.name}
-                                </option>
-                              );
-                            });
-                          })()}
-                        </select>
-                      </div>
-
-                      {hasMultipleActivations && (
-                        <div className="compare-form-row">
-                          <span className="calc-inline-label">Activation</span>
-                          <select
-                            value={calcActivationIndex}
-                            onChange={(e) => setCalcActivationIndex(Number(e.target.value))}
-                          >
-                            {activationMultipliers.map((_, i) => (
-                              <option key={i} value={i}>
-                                Cast {i + 1}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
-
-                      {skill && (
+                      {hasElationRow && (
                         <>
+                          <p className="compare-ocr-note ai-disclaimer">
+                            ⚠️ Elation DMG detected on at least one rotation row — these live-combat values apply
+                            to every Elation row in the rotation.
+                          </p>
                           <div className="compare-form-row">
                             <label className="calc-inline-label">
-                              Skill Level
+                              Punchline / Certified Banger value
                               <input
                                 type="number"
-                                min="1"
-                                max={skill.max_level}
-                                value={calcSkillLevel}
-                                onChange={(e) => handleCalcLevelChange(Number(e.target.value))}
+                                min="0"
+                                value={calcPunchlineValue}
+                                onChange={(e) => setCalcPunchlineValue(Number(e.target.value) || 0)}
                               />
                             </label>
                           </div>
-
-                          <p className="compare-ocr-note">{resolvedSkillDesc}</p>
-
-                          {nonStatScalingLabel ? (
+                          <div className="compare-form-row">
+                            <label className="calc-inline-label">
+                              <input
+                                type="checkbox"
+                                checked={calcUsingCertifiedBanger}
+                                onChange={(e) => setCalcUsingCertifiedBanger(e.target.checked)}
+                              />
+                              {' '}Using Certified Banger state (value above is Certified Banger, not live Punchline)
+                            </label>
+                          </div>
+                          {overflowConditional && (
                             <div className="compare-form-row">
                               <label className="calc-inline-label">
-                                {nonStatScalingLabel}
                                 <input
-                                  type="number"
-                                  min="0"
-                                  value={calcNonStatValue}
-                                  onChange={(e) => setCalcNonStatValue(Number(e.target.value) || 0)}
+                                  type="checkbox"
+                                  checked={calcUsingOverflowSplit}
+                                  onChange={(e) => setCalcUsingOverflowSplit(e.target.checked)}
                                 />
+                                {' '}Convert Punchline value above into "{overflowConditional.overflow.resourceLabel || overflowConditional.name}": +
+                                {overflowConditional.overflow.primaryRatePerPoint}%{' '}
+                                {STAT_TYPE_SHORT_LABELS[overflowConditional.overflow.primaryStat] || overflowConditional.overflow.primaryStat}{' '}
+                                per point until it hits {overflowConditional.overflow.capPercent}%, then +
+                                {overflowConditional.overflow.secondaryRatePerPoint}%{' '}
+                                {STAT_TYPE_SHORT_LABELS[overflowConditional.overflow.secondaryStat] || overflowConditional.overflow.secondaryStat}{' '}
+                                per remaining point
+                                {overflowConditional.suspicious && ' — ⚠️ AI-extracted values look off, verify manually'}
                               </label>
                             </div>
-                          ) : (
-                            <>
-                              {calcScalingStatus === 'loading' && (
-                                <p className="compare-ocr-note">Detecting damage type...</p>
-                              )}
-                              {calcScalingStatus === 'error' && (
-                                <p className="compare-ocr-note compare-ocr-note-warn">
-                                  {calcScalingError || "Couldn't reach the detection service"} — pick the
-                                  scaling stat manually (defaults to standard damage).
-                                </p>
-                              )}
-
-                              {isElation ? (
-                                <>
-                                  <p className="compare-ocr-note ai-disclaimer">
-                                    ⚠️ Elation DMG detected — this uses a different formula (no ATK/DEF/HP
-                                    scaling, no DMG Boost). Live combat values like Punchline and Merrymake
-                                    still need to be entered manually below.
-                                  </p>
-                                  <div className="compare-form-row">
-                                    <label className="calc-inline-label">
-                                      Punchline / Certified Banger value
-                                      <input
-                                        type="number"
-                                        min="0"
-                                        value={calcPunchlineValue}
-                                        onChange={(e) => setCalcPunchlineValue(Number(e.target.value) || 0)}
-                                      />
-                                    </label>
-                                  </div>
-                                  <div className="compare-form-row">
-                                    <label className="calc-inline-label">
-                                      <input
-                                        type="checkbox"
-                                        checked={calcUsingCertifiedBanger}
-                                        onChange={(e) => setCalcUsingCertifiedBanger(e.target.checked)}
-                                      />
-                                      {' '}Using Certified Banger state (value above is Certified Banger, not live Punchline)
-                                    </label>
-                                  </div>
-                                  <div className="compare-form-row">
-                                    <label className="calc-inline-label">
-                                      Merrymake %
-                                      <input
-                                        type="number"
-                                        min="0"
-                                        value={calcMerrymakePercent}
-                                        onChange={(e) => setCalcMerrymakePercent(Number(e.target.value) || 0)}
-                                      />
-                                    </label>
-                                  </div>
-                                </>
-                              ) : (
-                                <div className="compare-form-row">
-                                  <span className="calc-inline-label">Scaling stat</span>
-                                  <select value={calcScalingStat} onChange={(e) => setCalcScalingStat(e.target.value)}>
-                                    <option value="">None detected</option>
-                                    <option value="ATK">ATK</option>
-                                    <option value="DEF">DEF</option>
-                                    <option value="HP">HP</option>
-                                  </select>
-                                </div>
-                              )}
-                            </>
                           )}
-
-                          {matchedAiConditionals.map((c) => (
-                            <div key={c.name} className="compare-form-row ai-conditional-row">
-                              <div>
-                                <span className="calc-inline-label">
-                                  {c.name} <ConditionalHelpTooltip c={c} />{' '}
-                                  <span className="conditional-stat-type-tag">{c.statType}</span>
-                                </span>
-                                <p className="compare-ocr-note ai-disclaimer">
-                                  ⚠️ AI-extracted — {c.trigger} — verify against current patch
-                                </p>
-                                {c.suspicious && (
-                                  <p className="compare-ocr-note compare-ocr-note-warn">
-                                    ⚠️ {c.suspiciousNote || 'Something about this looked off'} — check the
-                                    wiki and consider adding this as a manual effect instead if it's wrong.
-                                  </p>
-                                )}
-                              </div>
-                              <select
-                                value={aiConditionalStacks[c.name] || 0}
-                                onChange={(e) =>
-                                  setAiConditionalStacks((prev) => ({
-                                    ...prev,
-                                    [c.name]: Number(e.target.value),
-                                  }))
-                                }
-                              >
-                                {Array.from({ length: c.maxStacks + 1 }, (_, n) => (
-                                  <option key={n} value={n}>
-                                    {n}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                          ))}
-
-                          {matchedManualConditionals.map((c) => (
-                            <div key={c.name} className="compare-form-row ai-conditional-row">
-                              <div>
-                                <span className="calc-inline-label">
-                                  {c.name} <ConditionalHelpTooltip c={c} />
-                                </span>
-                                <p className="compare-ocr-note">
-                                  Manually added — {c.statType} — {c.appliesToAbility}
-                                </p>
-                              </div>
-                              <select
-                                value={aiConditionalStacks[c.name] || 0}
-                                onChange={(e) =>
-                                  setAiConditionalStacks((prev) => ({
-                                    ...prev,
-                                    [c.name]: Number(e.target.value),
-                                  }))
-                                }
-                              >
-                                {Array.from({ length: c.maxStacks + 1 }, (_, n) => (
-                                  <option key={n} value={n}>
-                                    {n}
-                                  </option>
-                                ))}
-                              </select>
-                              <button
-                                type="button"
-                                className="compare-remove-btn"
-                                onClick={() =>
-                                  setManualConditionals((prev) => prev.filter((m) => m.name !== c.name))
-                                }
-                              >
-                                Remove
-                              </button>
-                            </div>
-                          ))}
-
-                          <div className="compare-form-row ai-conditional-row">
-                            <div className="manual-conditional-form">
-                              <input
-                                type="text"
-                                placeholder="Effect name (e.g. Netherwing RES Reduction)"
-                                value={manualConditionalForm.name}
-                                onChange={(e) =>
-                                  setManualConditionalForm((prev) => ({ ...prev, name: e.target.value }))
-                                }
-                              />
-                              <select
-                                value={manualConditionalForm.appliesToAbility}
-                                onChange={(e) =>
-                                  setManualConditionalForm((prev) => ({
-                                    ...prev,
-                                    appliesToAbility: e.target.value,
-                                  }))
-                                }
-                              >
-                                {CONDITIONAL_ABILITY_TARGETS.map((t) => (
-                                  <option key={t} value={t}>
-                                    {t}
-                                  </option>
-                                ))}
-                              </select>
-                              <select
-                                value={manualConditionalForm.statType}
-                                onChange={(e) =>
-                                  setManualConditionalForm((prev) => ({ ...prev, statType: e.target.value }))
-                                }
-                              >
-                                {CONDITIONAL_STAT_TYPES.map((t) => (
-                                  <option key={t} value={t}>
-                                    {t}
-                                  </option>
-                                ))}
-                              </select>
+                          <div className="compare-form-row">
+                            <label className="calc-inline-label">
+                              Merrymake %
                               <input
                                 type="number"
-                                placeholder="Value %"
-                                value={manualConditionalForm.value}
-                                onChange={(e) =>
-                                  setManualConditionalForm((prev) => ({
-                                    ...prev,
-                                    value: Number(e.target.value) || 0,
-                                  }))
-                                }
+                                min="0"
+                                value={calcMerrymakePercent}
+                                onChange={(e) => setCalcMerrymakePercent(Number(e.target.value) || 0)}
                               />
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const name = manualConditionalForm.name.trim();
-                                  if (!name) return;
-                                  const nameTaken =
-                                    aiConditionals.some((c) => c.name === name) ||
-                                    manualConditionals.some((c) => c.name === name);
-                                  if (nameTaken) return;
-                                  setManualConditionals((prev) => [
-                                    ...prev,
-                                    {
-                                      name,
-                                      appliesToAbility: manualConditionalForm.appliesToAbility,
-                                      statType: manualConditionalForm.statType,
-                                      valuesByStack: [manualConditionalForm.value],
-                                      maxStacks: 1,
-                                    },
-                                  ]);
-                                  setManualConditionalForm({
-                                    name: '',
-                                    appliesToAbility: 'ALL',
-                                    statType: 'RES_PEN',
-                                    value: 0,
-                                  });
-                                }}
-                              >
-                                Add effect
-                              </button>
-                            </div>
+                            </label>
                           </div>
                         </>
                       )}
+
+                      {allConditionals.length > 0 && (
+                        <div className="compare-form-row">
+                          <span className="calc-inline-label">Conditional bonuses (apply across the whole rotation)</span>
+                        </div>
+                      )}
+
+                      {aiConditionals
+                        .filter((c) => c.statType !== 'STAT_OVERFLOW_SPLIT')
+                        .map((c) => (
+                          <div key={c.name} className="compare-form-row ai-conditional-row">
+                            <div>
+                              <span className="calc-inline-label">
+                                {c.name} <ConditionalHelpTooltip c={c} />{' '}
+                                <span className="conditional-stat-type-tag">{c.statType}</span>
+                              </span>
+                              <p className="compare-ocr-note ai-disclaimer">
+                                ⚠️ AI-extracted — {c.trigger} — verify against current patch
+                              </p>
+                              {c.suspicious && (
+                                <p className="compare-ocr-note compare-ocr-note-warn">
+                                  ⚠️ Sanitizer flagged as suspicious: {c.suspiciousNote}
+                                </p>
+                              )}
+                            </div>
+                            <select
+                              value={aiConditionalStacks[c.name] || 0}
+                              onChange={(e) =>
+                                setAiConditionalStacks((prev) => ({
+                                  ...prev,
+                                  [c.name]: Number(e.target.value),
+                                }))
+                              }
+                            >
+                              {Array.from({ length: c.maxStacks + 1 }, (_, n) => (
+                                <option key={n} value={n}>
+                                  {n}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        ))}
+
+                      {manualConditionals
+                        .filter((c) => c.statType !== 'STAT_OVERFLOW_SPLIT')
+                        .map((c) => (
+                          <div key={c.name} className="compare-form-row ai-conditional-row">
+                            <div>
+                              <span className="calc-inline-label">
+                                {c.name} <ConditionalHelpTooltip c={c} />
+                              </span>
+                              <p className="compare-ocr-note">
+                                Manually added — {c.statType} — {c.appliesToAbility}
+                              </p>
+                            </div>
+                            <select
+                              value={aiConditionalStacks[c.name] || 0}
+                              onChange={(e) =>
+                                setAiConditionalStacks((prev) => ({
+                                  ...prev,
+                                  [c.name]: Number(e.target.value),
+                                }))
+                              }
+                            >
+                              {Array.from({ length: c.maxStacks + 1 }, (_, n) => (
+                                <option key={n} value={n}>
+                                  {n}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              className="compare-remove-btn"
+                              onClick={() =>
+                                setManualConditionals((prev) => prev.filter((m) => m.name !== c.name))
+                              }
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ))}
+
+                      <div className="compare-form-row ai-conditional-row">
+                        <div className="manual-conditional-form">
+                          <input
+                            type="text"
+                            placeholder="Effect name (e.g. Netherwing RES Reduction)"
+                            value={manualConditionalForm.name}
+                            onChange={(e) =>
+                              setManualConditionalForm((prev) => ({ ...prev, name: e.target.value }))
+                            }
+                          />
+                          <select
+                            value={manualConditionalForm.appliesToAbility}
+                            onChange={(e) =>
+                              setManualConditionalForm((prev) => ({
+                                ...prev,
+                                appliesToAbility: e.target.value,
+                              }))
+                            }
+                          >
+                            {CONDITIONAL_ABILITY_TARGETS.map((t) => (
+                              <option key={t} value={t}>
+                                {t}
+                              </option>
+                            ))}
+                          </select>
+                          <select
+                            value={manualConditionalForm.statType}
+                            onChange={(e) =>
+                              setManualConditionalForm((prev) => ({ ...prev, statType: e.target.value }))
+                            }
+                          >
+                            {CONDITIONAL_STAT_TYPES.map((t) => (
+                              <option key={t} value={t}>
+                                {t}
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            type="number"
+                            placeholder="Value %"
+                            value={manualConditionalForm.value}
+                            onChange={(e) =>
+                              setManualConditionalForm((prev) => ({
+                                ...prev,
+                                value: Number(e.target.value) || 0,
+                              }))
+                            }
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const name = manualConditionalForm.name.trim();
+                              if (!name) return;
+                              const nameTaken =
+                                aiConditionals.some((c) => c.name === name) ||
+                                manualConditionals.some((c) => c.name === name);
+                              if (nameTaken) return;
+                              setManualConditionals((prev) => [
+                                ...prev,
+                                {
+                                  name,
+                                  appliesToAbility: manualConditionalForm.appliesToAbility,
+                                  statType: manualConditionalForm.statType,
+                                  valuesByStack: [manualConditionalForm.value],
+                                  maxStacks: 1,
+                                },
+                              ]);
+                              setManualConditionalForm({
+                                name: '',
+                                appliesToAbility: 'ALL',
+                                statType: 'RES_PEN',
+                                value: 0,
+                              });
+                            }}
+                          >
+                            Add effect
+                          </button>
+                        </div>
+                      </div>
 
                       <div className="compare-weights">
                         <div className="compare-weight-row">
@@ -2365,26 +2269,6 @@ export default function ProfilePage() {
                             {' '}Enemy is Toughness Broken
                           </label>
                         </div>
-                        {hasMultipleHitValues && (
-                          <div className="compare-weight-row">
-                            <span>Hit shown below</span>
-                            <select
-                              value={selectedHitIndex}
-                              onChange={(e) => setCalcParamIndex(Number(e.target.value))}
-                            >
-                              {hitIndices.map((paramIdx, i) => {
-                                const targetLabel = getHitTargetLabel(skill.desc, paramIdx);
-                                const fallback = i === 0 ? 'main target' : null;
-                                const shown = targetLabel || fallback;
-                                return (
-                                  <option key={paramIdx} value={paramIdx}>
-                                    Hit {i + 1}{shown ? ` (${shown})` : ''}
-                                  </option>
-                                );
-                              })}
-                            </select>
-                          </div>
-                        )}
                         {perHitStackingBonus && (
                           <div className="compare-weight-row">
                             <span>{perHitStackingBonus.sourceName} triggers</span>
@@ -2407,25 +2291,219 @@ export default function ProfilePage() {
                         </div>
                       </div>
 
-                      {damage != null && (
-                        <p className="damage-calc-result">
-                          Estimated DMG
-                          {hasMultipleActivations ? ` (Cast ${calcActivationIndex + 1})` : ''}
-                          {hasMultipleHitValues ? ` (Hit ${hitIndices.indexOf(selectedHitIndex) + 1}${selectedHitTargetLabel ? `: ${selectedHitTargetLabel}` : ''})` : ''}:{' '}
-                          <strong>{Math.round(damage).toLocaleString()}</strong>
+                      <div className="compare-form-row">
+                        <span className="calc-inline-label">Rotation</span>
+                        <select
+                          value=""
+                          onChange={(e) => {
+                            if (e.target.value) addRotationRow(e.target.value);
+                          }}
+                        >
+                          <option value="">+ Add ability to rotation...</option>
+                          {dedupedSelectableIds.map((id) => {
+                            const s = characterSkills[id];
+                            return (
+                              <option key={id} value={id}>
+                                {s.type_text ? `${s.type_text}: ` : ''}
+                                {s.name}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+
+                      {rotationRows.length === 0 && (
+                        <p className="compare-ocr-note">
+                          Add abilities above to build a rotation. Total damage is the sum of every row, each
+                          counted the number of times it actually happens in one rotation — not necessarily
+                          once per cast (e.g. a proc effect gated behind an ally's action, like Silver Wolf
+                          LV.999's "Top Loot Box", should have its own row with your expected trigger count,
+                          separate from her Ultimate).
                         </p>
                       )}
-                      {instancedHitDamage != null && (
-                        <p className="damage-calc-result">
-                          Each instance ({(instancedHitInfo.perInstancePercent * 100).toFixed(1)}%):{' '}
-                          <strong>{Math.round(instancedHitDamage).toLocaleString()}</strong> × {instancedHitInfo.instanceCount} ={' '}
-                          <strong>{Math.round(instancedHitTotal).toLocaleString()}</strong>
-                        </p>
-                      )}
-                      {totalDamage != null && (calcEnemyCount > 1 || instancedHitTotal != null) && (
-                        <p className="damage-calc-result">
-                          Total DMG ({calcEnemyCount} enem{calcEnemyCount === 1 ? 'y' : 'ies'}
-                          {instancedHitTotal != null ? ' + instances' : ''}): <strong>{Math.round(totalDamage).toLocaleString()}</strong>
+
+                      {rotationRows.map((row) => {
+                        const meta = getRowMeta(row);
+                        const rowResult = perRow.find((r) => r.id === row.id);
+
+                        return (
+                          <div key={row.id} className="rotation-row">
+                            <div className="compare-form-row">
+                              <select
+                                value={row.skillId}
+                                onChange={(e) => handleRotationRowSkillChange(row.id, e.target.value)}
+                              >
+                                {dedupedSelectableIds.map((id) => {
+                                  const s = characterSkills[id];
+                                  return (
+                                    <option key={id} value={id}>
+                                      {s.type_text ? `${s.type_text}: ` : ''}
+                                      {s.name}
+                                    </option>
+                                  );
+                                })}
+                              </select>
+                              <button
+                                type="button"
+                                className="compare-remove-btn"
+                                onClick={() => removeRotationRow(row.id)}
+                              >
+                                Remove
+                              </button>
+                            </div>
+
+                            <div className="compare-form-row">
+                              <label className="calc-inline-label">
+                                Label
+                                <input
+                                  type="text"
+                                  value={row.label}
+                                  onChange={(e) => updateRotationRow(row.id, { label: e.target.value, labelIsCustom: true })}
+                                />
+                              </label>
+                              <label className="calc-inline-label">
+                                ×/rotation
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="1"
+                                  value={row.countPerRotation}
+                                  onChange={(e) =>
+                                    updateRotationRow(row.id, { countPerRotation: Math.max(0, Number(e.target.value) || 0) })
+                                  }
+                                />
+                              </label>
+                            </div>
+
+                            {meta.hasMultipleActivations && (
+                              <div className="compare-form-row">
+                                <span className="calc-inline-label">Activation</span>
+                                <select
+                                  value={row.activationIndex}
+                                  onChange={(e) => updateRotationRow(row.id, { activationIndex: Number(e.target.value) })}
+                                >
+                                  {meta.activationMultipliers.map((_, i) => (
+                                    <option key={i} value={i}>
+                                      Cast {i + 1}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            )}
+
+                            {meta.skill && (
+                              <>
+                                <div className="compare-form-row">
+                                  <label className="calc-inline-label">
+                                    Skill Level
+                                    <input
+                                      type="number"
+                                      min="1"
+                                      max={meta.skill.max_level}
+                                      value={row.skillLevel}
+                                      onChange={(e) => handleRotationRowLevelChange(row.id, Number(e.target.value))}
+                                    />
+                                  </label>
+                                </div>
+
+                                <p className="compare-ocr-note">{meta.resolvedDesc}</p>
+
+                                {row.damageSourceName && (
+                                  <p className="compare-ocr-note ai-disclaimer">
+                                    ℹ️ This ability's own action doesn't deal damage directly — the DMG shown
+                                    belongs to a separately-triggered effect, "{row.damageSourceName}". Set
+                                    ×/rotation to how many times you expect it to actually trigger, not how many
+                                    times you cast this ability.
+                                  </p>
+                                )}
+
+                                {meta.nonStatScalingLabel ? (
+                                  <div className="compare-form-row">
+                                    <label className="calc-inline-label">
+                                      {meta.nonStatScalingLabel}
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        value={row.nonStatValue}
+                                        onChange={(e) => updateRotationRow(row.id, { nonStatValue: Number(e.target.value) || 0 })}
+                                      />
+                                    </label>
+                                  </div>
+                                ) : (
+                                  <>
+                                    {row.scalingStatus === 'loading' && (
+                                      <p className="compare-ocr-note">Detecting damage type...</p>
+                                    )}
+                                    {row.scalingStatus === 'error' && (
+                                      <p className="compare-ocr-note compare-ocr-note-warn">
+                                        {row.scalingError || "Couldn't reach the detection service"} — pick the
+                                        scaling stat manually (defaults to standard damage).
+                                      </p>
+                                    )}
+                                    {row.damageType === DamageType.ELATION ? (
+                                      <p className="compare-ocr-note ai-disclaimer">
+                                        ⚠️ Elation DMG detected — uses the shared Punchline/Merrymake values
+                                        above instead of a scaling stat.
+                                      </p>
+                                    ) : (
+                                      <div className="compare-form-row">
+                                        <span className="calc-inline-label">Scaling stat</span>
+                                        <select
+                                          value={row.scalingStat}
+                                          onChange={(e) => updateRotationRow(row.id, { scalingStat: e.target.value })}
+                                        >
+                                          <option value="">None detected</option>
+                                          <option value="ATK">ATK</option>
+                                          <option value="DEF">DEF</option>
+                                          <option value="HP">HP</option>
+                                        </select>
+                                      </div>
+                                    )}
+                                  </>
+                                )}
+
+                                {meta.hasMultipleHitValues && (
+                                  <div className="compare-form-row">
+                                    <span className="calc-inline-label">Hit</span>
+                                    <select
+                                      value={meta.selectedHitIndex}
+                                      onChange={(e) => updateRotationRow(row.id, { paramIndex: Number(e.target.value) })}
+                                    >
+                                      {meta.hitIndices.map((paramIdx, i) => {
+                                        const targetLabel = getHitTargetLabel(meta.skill.desc, paramIdx);
+                                        const fallback = i === 0 ? 'main target' : null;
+                                        const shown = targetLabel || fallback;
+                                        return (
+                                          <option key={paramIdx} value={paramIdx}>
+                                            Hit {i + 1}{shown ? ` (${shown})` : ''}
+                                          </option>
+                                        );
+                                      })}
+                                    </select>
+                                  </div>
+                                )}
+                              </>
+                            )}
+
+                            {rowResult && rowResult.perHit != null && (
+                              <p className="damage-calc-result">
+                                {row.countPerRotation === 1 ? (
+                                  <>≈ <strong>{Math.round(rowResult.perHit).toLocaleString()}</strong> DMG</>
+                                ) : (
+                                  <>
+                                    ≈ <strong>{Math.round(rowResult.perHit).toLocaleString()}</strong> ×{' '}
+                                    {row.countPerRotation} = <strong>{Math.round(rowResult.rowTotal).toLocaleString()}</strong> DMG
+                                  </>
+                                )}
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
+
+                      {totalRotationDamage != null && rotationRows.length > 0 && (
+                        <p className="damage-calc-result damage-calc-total">
+                          Total rotation DMG: <strong>{Math.round(totalRotationDamage).toLocaleString()}</strong>
                         </p>
                       )}
                     </div>
