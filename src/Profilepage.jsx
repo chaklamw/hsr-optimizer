@@ -1129,6 +1129,12 @@ export default function ProfilePage() {
   const [aiConditionalError, setAiConditionalError] = useState('');
   const [aiConditionalStacks, setAiConditionalStacks] = useState({});
   const [aiConditionalCached, setAiConditionalCached] = useState(false);
+  // Tracks which character's avatarId the AI conditional detector has
+  // already been run for (successfully or not), so opening the calculator
+  // can auto-trigger detection once per character instead of leaving it as
+  // an always-manual click, while still not re-firing on every re-open or
+  // re-render for a character it's already checked.
+  const [aiConditionalCharacterId, setAiConditionalCharacterId] = useState(null);
   const cardRefs = useRef({});
   const trackRef = useRef(null);
 
@@ -1178,6 +1184,11 @@ export default function ProfilePage() {
   async function handleDetectAiConditionals(forceRefresh = false) {
     const characterName = characterNames[activeCharacter.avatarId]?.name || 'Unknown';
     const skillIds = characterNames[activeCharacter.avatarId]?.skills || [];
+    // Marked as soon as detection is kicked off (not just on success) so
+    // the auto-detect effect below doesn't loop retrying a character whose
+    // extraction failed — the user can still force a retry via the
+    // "Detect" / "Re-detect" buttons, which call this function directly.
+    setAiConditionalCharacterId(activeCharacter.avatarId);
 
     const seenDescriptions = new Set();
     const abilities = skillIds
@@ -1489,6 +1500,24 @@ export default function ProfilePage() {
       if (firstId != null) setSelectedId(firstId);
     }
   }, [data]);
+
+  // Auto-run AI conditional detection when the Damage Calculator opens,
+  // instead of leaving it as a mandatory extra click every time. The
+  // "Detect conditional bonuses" / "Re-detect" buttons still exist for the
+  // rare case of a kit rework (novaflare) — forceRefresh stays false here,
+  // so this is just a fast cache hit through the backend for the vast
+  // majority of characters whose kit text hasn't changed, not a fresh AI
+  // call on every open. Keyed on avatarId so it fires once per character
+  // rather than re-fetching every time the modal is reopened.
+  useEffect(() => {
+    if (!showDamageCalc || !data) return;
+    const characters = data.detailInfo?.avatarDetailList || [];
+    const currentId = selectedId ?? characters[0]?.avatarId;
+    if (currentId == null) return;
+    if (aiConditionalCharacterId === currentId) return;
+    if (aiConditionalStatus === 'loading') return;
+    handleDetectAiConditionals(false);
+  }, [showDamageCalc, selectedId, data]);
 
   if (loading) {
     const percent = Math.round((loadedCount / TOTAL_REQUESTS) * 100);
@@ -2149,13 +2178,27 @@ export default function ProfilePage() {
                       </div>
 
                       <div className="compare-form-row">
-                        <button
-                          type="button"
-                          className="compare-weights-toggle"
-                          onClick={() => handleDetectAiConditionals(false)}
-                        >
-                          {aiConditionalStatus === 'loading' ? 'Detecting...' : 'Detect conditional bonuses (AI)'}
-                        </button>
+                        {aiConditionalStatus === 'loading' && (
+                          <p className="compare-ocr-note">Detecting conditional bonuses...</p>
+                        )}
+                        {aiConditionalStatus === 'idle' && (
+                          <button
+                            type="button"
+                            className="compare-weights-toggle"
+                            onClick={() => handleDetectAiConditionals(false)}
+                          >
+                            Detect conditional bonuses (AI)
+                          </button>
+                        )}
+                        {aiConditionalStatus === 'error' && (
+                          <button
+                            type="button"
+                            className="compare-weights-toggle"
+                            onClick={() => handleDetectAiConditionals(false)}
+                          >
+                            Retry detection
+                          </button>
+                        )}
                         {(aiConditionalStatus === 'done' || aiConditionalStatus === 'empty') && (
                           <button
                             type="button"
