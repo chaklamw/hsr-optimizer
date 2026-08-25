@@ -1,11 +1,11 @@
 {
-  "8c63de129165e4f9958af9245929ebfe307dc0cfce8a9884bc5249964df3f8f0": {
+  "bcf15c40e29dde2bf266045b36de93ccc5659e48efc360b8ad8caca12660fe63": {
     "result": {
       "damageType": "STANDARD",
       "scalingStat": "HP",
       "damageSourceName": null
     },
-    "extractedAt": "2026-08-24T19:20:49.140Z"
+    "extractedAt": "2026-08-25T00:37:08.814Z"
   },
   "8b94a21cd133214149b74d16be8ba80210b763731b203436de4c474aa37e2975": {
     "result": {
@@ -13,6 +13,30 @@
       "scalingStat": "HP",
       "damageSourceName": null
     },
-    "extractedAt": "2026-08-24T19:20:54.609Z"
+    "extractedAt": "2026-08-25T00:37:18.189Z"
+  },
+  "329b473e1a17ada5bbd3914366ba007217ac7afa61e562034f12c020629b6213": {
+    "result": {
+      "damageType": "STANDARD",
+      "scalingStat": "HP",
+      "damageSourceName": null
+    },
+    "extractedAt": "2026-08-25T05:22:44.320Z"
+  },
+  "790fe0dd2fc137562298e41cc2cb9f2c7b8c1da2fe2b98c18c3e2a91dacbcb35": {
+    "result": {
+      "damageType": "STANDARD",
+      "scalingStat": "HP",
+      "damageSourceName": null
+    },
+    "extractedAt": "2026-08-25T05:23:05.842Z"
+  },
+  "8c63de129165e4f9958af9245929ebfe307dc0cfce8a9884bc5249964df3f8f0": {
+    "result": {
+      "damageType": "STANDARD",
+      "scalingStat": "HP",
+      "damageSourceName": null
+    },
+    "extractedAt": "2026-08-25T05:32:53.891Z"
   }
 }

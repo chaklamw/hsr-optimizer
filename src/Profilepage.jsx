@@ -291,9 +291,11 @@ function getDamagePercentParamIndices(desc) {
     // here avoids showing the same value twice, once as a generic Hit
     // and once as an instanced hit.
     const isInstanceContext = /instance/.test(before) || /instance/.test(after);
+    const isEscalatingMultiplierContext = /progressively|respectively/.test(before);
     const mentionsDmg = /dmg/.test(before);
 
-    if (mentionsDmg && !isHealOrShieldContext && !isInstanceContext) indices.push(idx);
+    if (mentionsDmg && !isHealOrShieldContext && !isInstanceContext && !isEscalatingMultiplierContext)
+      indices.push(idx);
   }
   return [...new Set(indices)];
 }
@@ -560,6 +562,47 @@ function isSelectableAttack(skill) {
   return dealsDirectDamage(skill) && DIRECT_ATTACK_TYPES.has(skill.type_text);
 }
 
+// Groups a character's selectable abilities by name+type_text (the same
+// grouping rule used for the Cast dropdown), then finds whichever group's
+// own text describes an escalating per-cast DMG multiplier (e.g.
+// Castorice's Breath Scorches the Shadow), plus flags it as a "family"
+// shared with any other ability of the same type_text (e.g. Claw Splits
+// the Veil, Wings Sweep the Ruins) that can follow it within the same
+// turn. Not specific to any one character by name — this is detected
+// purely from whichever ability's text matches getEscalatingMultipliers.
+function findBreathLinkedGroup(characterSkills, skillIds) {
+  const groups = {};
+  (skillIds || []).forEach((id) => {
+    const s = characterSkills[id];
+    if (!s || !isSelectableAttack(s)) return;
+    const key = `${s.name}__${s.type_text}`;
+    (groups[key] = groups[key] || []).push(id);
+  });
+  let found = null;
+  Object.values(groups).forEach((ids) => {
+    if (found) return;
+    const s = characterSkills[ids[0]];
+    const resolvedDesc = formatLightConeDesc(s.desc, s.params[s.params.length - 1]) || s.desc || '';
+    const escalating = getEscalatingMultipliers(resolvedDesc);
+    if (escalating) found = { skillId: ids[0], typeText: s.type_text, name: s.name, escalatingLength: escalating.length };
+  });
+  return found;
+}
+
+// The AI-extracted (or manual) conditional that should sync to the
+// escalating ability's own turn-position selector instead of staying an
+// independently-selected stack count — identified generically by its
+// trigger text referencing the escalating ability by name, rather than
+// hardcoded to one character's specific trace/conditional name.
+function findLinkedTraceConditional(conditionals, breathAbilityName) {
+  if (!breathAbilityName) return null;
+  const needle = breathAbilityName.toLowerCase();
+  return (
+    conditionals.find((c) => c.statType === 'DMG_PERCENT' && (c.trigger || '').toLowerCase().includes(needle)) ||
+    null
+  );
+}
+
 const TOTAL_REQUESTS = 10;
 
 function computeFinalStats(character, promotions, relicSets, skillTrees, lightConeRanks) {
@@ -776,9 +819,15 @@ function computeScenarioTotalDamage(stats, scenario) {
     ? stats.genericStats.ElationDamageAddedRatio * 100
     : 0;
 
+  const breathLinkedGroup = findBreathLinkedGroup(characterSkills, skillIds);
+  const linkedTraceConditional = findLinkedTraceConditional(
+    [...aiConditionals, ...manualConditionals],
+    breathLinkedGroup?.name
+  );
+
   const matchedAll = [
-    ...aiConditionals.filter((c) => conditionalAppliesToSkill(c, skill.type_text)),
-    ...manualConditionals.filter((c) => conditionalAppliesToSkill(c, skill.type_text)),
+    ...aiConditionals.filter((c) => conditionalAppliesToSkill(c, skill.type_text) && c !== linkedTraceConditional),
+    ...manualConditionals.filter((c) => conditionalAppliesToSkill(c, skill.type_text) && c !== linkedTraceConditional),
   ];
   const sumConditionalStat = (statType) =>
     matchedAll.reduce((sum, c) => {
@@ -787,7 +836,27 @@ function computeScenarioTotalDamage(stats, scenario) {
       return sum + (c.valuesByStack[stacks - 1] || 0);
     }, 0);
 
-  let aiDmgPercent = sumConditionalStat('DMG_PERCENT');
+  // The escalating ability's own row treats calcActivationIndex as a
+  // 0-indexed cast number (cast N -> stack N), while a sibling ability
+  // (one that can follow it within the same turn but doesn't escalate its
+  // own multiplier) treats it as a literal preceding-breath count, which
+  // can legitimately be 0.
+  const isBreathAbility = !!breathLinkedGroup && calcSkillId === breathLinkedGroup.skillId;
+  const isBreathSibling =
+    !!breathLinkedGroup && !isBreathAbility && skill.type_text === breathLinkedGroup.typeText;
+  const linkedTraceStackCount = isBreathAbility
+    ? calcActivationIndex + 1
+    : isBreathSibling
+    ? calcActivationIndex
+    : 0;
+  const linkedTraceBonus =
+    linkedTraceConditional && linkedTraceStackCount > 0
+      ? linkedTraceConditional.valuesByStack[
+          Math.min(linkedTraceStackCount, linkedTraceConditional.maxStacks) - 1
+        ] || 0
+      : 0;
+
+  let aiDmgPercent = sumConditionalStat('DMG_PERCENT') + linkedTraceBonus;
   const aiResPenPercent = sumConditionalStat('RES_PEN');
   const aiDefPenPercent = sumConditionalStat('DEF_PEN');
   const aiVulnerabilityPercent = sumConditionalStat('VULNERABILITY');
@@ -846,7 +915,7 @@ function computeScenarioTotalDamage(stats, scenario) {
   const escalatingMultipliers = getEscalatingMultipliers(resolvedSkillDesc);
   const activationMultipliers = escalatingMultipliers ? [baseMultiplier, ...escalatingMultipliers] : null;
   const selectedActivationMultiplier = activationMultipliers
-    ? activationMultipliers[calcActivationIndex] ?? activationMultipliers[0]
+    ? activationMultipliers[Math.min(calcActivationIndex, activationMultipliers.length - 1)]
     : baseMultiplier;
 
   const allAbilities = (skillIds || [])
@@ -1122,6 +1191,27 @@ export default function ProfilePage() {
         abilities.push({
           type: 'Relic Set (4pc)',
           description: `${set.name} (4pc): ${set.desc[1]}`,
+        });
+      }
+    });
+
+    // Trace nodes (Bonus Abilities) can carry the same kind of conditional
+    // damage bonus as a kit ability or relic set — e.g. Castorice's "Where
+    // the West Wind Dwells" (+30% DMG per Breath Scorches the Shadow cast,
+    // stacking up to 6, lasting until end of turn) — but live in a
+    // separate data source (character_skill_trees.json) that isn't part of
+    // characterSkills. Only nodes the player has actually unlocked/leveled
+    // are sent, mirroring how only equipped relic set tiers are sent above.
+    (activeCharacter.skillTreeList || []).forEach((point) => {
+      const treeInfo = skillTrees[point.pointId];
+      if (!treeInfo || !treeInfo.desc) return;
+      const levelParams = treeInfo.params?.[point.level - 1] || treeInfo.params?.[treeInfo.params.length - 1];
+      const desc = formatLightConeDesc(treeInfo.desc, levelParams) || treeInfo.desc;
+      if (desc && isDamageRelevantText(desc) && !seenDescriptions.has(desc)) {
+        seenDescriptions.add(desc);
+        abilities.push({
+          type: 'Trace',
+          description: `${treeInfo.name || 'Trace'}: ${desc}`,
         });
       }
     });
@@ -1871,6 +1961,25 @@ export default function ProfilePage() {
                 );
                 const hasElationRow = rotationRows.some((r) => r.damageType === DamageType.ELATION);
 
+                // Some abilities' own DMG multiplier escalates per cast
+                // within one turn (e.g. Castorice's Breath Scorches the
+                // Shadow), and a sibling ability of the same type_text can
+                // follow it in that same turn (e.g. Claw Splits the Veil,
+                // Wings Sweep the Ruins) inheriting whatever per-turn
+                // conditional bonus the escalating one has been stacking
+                // (e.g. a Trace like Where the West Wind Dwells). All of
+                // that family shares one "how far into this turn" selector
+                // rather than each row picking its own independently —
+                // sized to whichever is larger, the ability's own number of
+                // escalation stages or the linked conditional's max stacks.
+                const breathLinkedGroup = findBreathLinkedGroup(characterSkills, skillIds);
+                const linkedTraceConditional = findLinkedTraceConditional(
+                  allConditionals,
+                  breathLinkedGroup?.name
+                );
+                let breathMaxCasts = breathLinkedGroup ? breathLinkedGroup.escalatingLength + 1 : 1;
+                if (linkedTraceConditional) breathMaxCasts = Math.max(breathMaxCasts, linkedTraceConditional.maxStacks);
+
                 // Display-only estimate of effective enemy RES/DEF-shred —
                 // sums RES_PEN/DEF_PEN across every currently-added
                 // conditional regardless of which row(s) it actually
@@ -1921,6 +2030,11 @@ export default function ProfilePage() {
                     : null;
                   const hasMultipleActivations = activationVariantIds.length > 1 && !!activationMultipliers;
 
+                  const isBreathAbility = !!breathLinkedGroup && activationVariantIds[0] === breathLinkedGroup.skillId;
+                  const isBreathSibling =
+                    !!breathLinkedGroup && !isBreathAbility && skill?.type_text === breathLinkedGroup.typeText;
+                  const hasTurnPositionSelector = isBreathAbility || isBreathSibling;
+
                   return {
                     skill,
                     resolvedDesc,
@@ -1931,6 +2045,9 @@ export default function ProfilePage() {
                     selectedHitTargetLabel,
                     activationMultipliers,
                     hasMultipleActivations,
+                    isBreathAbility,
+                    isBreathSibling,
+                    hasTurnPositionSelector,
                   };
                 }
 
@@ -2074,7 +2191,7 @@ export default function ProfilePage() {
                       )}
 
                       {aiConditionals
-                        .filter((c) => c.statType !== 'STAT_OVERFLOW_SPLIT')
+                        .filter((c) => c.statType !== 'STAT_OVERFLOW_SPLIT' && c !== linkedTraceConditional)
                         .map((c) => (
                           <div key={c.name} className="compare-form-row ai-conditional-row">
                             <div>
@@ -2110,7 +2227,7 @@ export default function ProfilePage() {
                         ))}
 
                       {manualConditionals
-                        .filter((c) => c.statType !== 'STAT_OVERFLOW_SPLIT')
+                        .filter((c) => c.statType !== 'STAT_OVERFLOW_SPLIT' && c !== linkedTraceConditional)
                         .map((c) => (
                           <div key={c.name} className="compare-form-row ai-conditional-row">
                             <div>
@@ -2375,18 +2492,23 @@ export default function ProfilePage() {
                               </label>
                             </div>
 
-                            {meta.hasMultipleActivations && (
+                            {meta.hasTurnPositionSelector && (
                               <div className="compare-form-row">
-                                <span className="calc-inline-label">Activation</span>
+                                <span className="calc-inline-label">
+                                  {meta.isBreathAbility ? 'Cast' : 'Breaths cast this turn'}
+                                </span>
                                 <select
                                   value={row.activationIndex}
                                   onChange={(e) => updateRotationRow(row.id, { activationIndex: Number(e.target.value) })}
                                 >
-                                  {meta.activationMultipliers.map((_, i) => (
-                                    <option key={i} value={i}>
-                                      Cast {i + 1}
-                                    </option>
-                                  ))}
+                                  {Array.from(
+                                    { length: meta.isBreathAbility ? breathMaxCasts : breathMaxCasts + 1 },
+                                    (_, i) => (
+                                      <option key={i} value={i}>
+                                        {meta.isBreathAbility ? `Cast ${i + 1}` : i}
+                                      </option>
+                                    )
+                                  )}
                                 </select>
                               </div>
                             )}

@@ -1,10 +1,10 @@
 {
-  "d2b8aee93c75c941385129d6cbbf6461ee86aa2050932ca812c4cfb813db27c6": {
+  "f184d4dc4d685ade43d2583841abd0ba2281d630802c68d6dd66fa286f356c3d": {
     "characterName": "Castorice",
     "conditionals": [
       {
-        "name": "Lost Netherland RES Reduction",
-        "appliesToAbility": "ALL",
+        "name": "All-Type RES Reduction",
+        "appliesToAbility": "ULT",
         "statType": "RES_PEN",
         "trigger": "always active while Territory 'Lost Netherland' is deployed",
         "valuesByStack": [
@@ -19,7 +19,7 @@
         "name": "Allies HP Loss DMG Boost",
         "appliesToAbility": "ALL",
         "statType": "DMG_PERCENT",
-        "trigger": "Allies lose HP",
+        "trigger": "Allies lose HP, up to 3 stacks, each +25% DMG",
         "valuesByStack": [
           25,
           50,
@@ -31,25 +31,10 @@
         "suspiciousNote": ""
       },
       {
-        "name": "Breath Scorches the Shadow DMG Multiplier Increase",
-        "appliesToAbility": "SKILL",
-        "statType": "DMG_PERCENT",
-        "trigger": "Each successive cast increases DMG multiplier, up to 3 casts",
-        "valuesByStack": [
-          33.6,
-          39.2,
-          47.6
-        ],
-        "maxStacks": 3,
-        "overflow": null,
-        "suspicious": false,
-        "suspiciousNote": ""
-      },
-      {
-        "name": "Netherwing Summon DMG Boost",
+        "name": "Netherwing DMG Boost",
         "appliesToAbility": "ALL",
         "statType": "DMG_PERCENT",
-        "trigger": "Netherwing summoned",
+        "trigger": "When Netherwing is summoned",
         "valuesByStack": [
           10
         ],
@@ -57,8 +42,26 @@
         "overflow": null,
         "suspicious": false,
         "suspiciousNote": ""
+      },
+      {
+        "name": "Breath Scorches the Shadow DMG Boost",
+        "appliesToAbility": "ALL",
+        "statType": "DMG_PERCENT",
+        "trigger": "Each time Netherwing uses Breath Scorches the Shadow, DMG dealt increases by 30% per stack, up to 6 stacks, until end of turn",
+        "valuesByStack": [
+          30,
+          60,
+          90,
+          120,
+          150,
+          180
+        ],
+        "maxStacks": 6,
+        "overflow": null,
+        "suspicious": false,
+        "suspiciousNote": ""
       }
     ],
-    "extractedAt": "2026-08-24T19:18:43.400Z"
+    "extractedAt": "2026-08-25T05:45:59.732Z"
   }
 }
