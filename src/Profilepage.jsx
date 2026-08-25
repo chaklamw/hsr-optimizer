@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, Link } from 'react-router-dom';
 import { computeDamage, computeElationDamage, DamageType } from './damageCalculator';
 
@@ -445,33 +446,91 @@ const STAT_TYPE_SHORT_LABELS = {
   ATK_PERCENT: 'ATK%',
 };
 
+// The tooltip used to be an absolutely-positioned child of the "?" icon.
+// That's fine on its own, but when the icon sits inside a scrollable
+// container (the damage calculator's conditional bonuses list), an
+// absolutely-positioned descendant that pokes past the container's right
+// edge expands that container's scrollable content area — so the whole
+// menu picked up an unwanted horizontal scrollbar just because one tooltip
+// happened to render near the edge.
+//
+// Rendering the tooltip through a portal into document.body sidesteps that
+// entirely: it's laid out relative to the viewport, not the scrolling
+// menu, so it can never affect the menu's scroll dimensions. We measure
+// the icon's position on hover/focus and clamp the tooltip's horizontal
+// position so it always stays fully within the viewport.
+const TOOLTIP_WIDTH = 280;
+const TOOLTIP_VIEWPORT_MARGIN = 12;
+
 function ConditionalHelpTooltip({ c }) {
+  const iconRef = useRef(null);
+  const [tooltipPos, setTooltipPos] = useState(null);
+
+  const updatePosition = () => {
+    const el = iconRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const width = Math.min(TOOLTIP_WIDTH, window.innerWidth - TOOLTIP_VIEWPORT_MARGIN * 2);
+    const idealLeft = rect.left + rect.width / 2 - width / 2;
+    const clampedLeft = Math.min(
+      Math.max(idealLeft, TOOLTIP_VIEWPORT_MARGIN),
+      window.innerWidth - width - TOOLTIP_VIEWPORT_MARGIN
+    );
+    setTooltipPos({
+      left: clampedLeft,
+      bottom: window.innerHeight - rect.top + 8,
+      width,
+    });
+  };
+
+  const showTooltip = () => updatePosition();
+  const hideTooltip = () => setTooltipPos(null);
+
   return (
-    <span className="conditional-help-wrap">
-      <span className="conditional-help-icon">?</span>
-      <div className="conditional-tooltip">
-        <p className="conditional-tooltip-trigger">{c.trigger || '(no description provided)'}</p>
-        <p className="conditional-tooltip-effect">
-          <strong>Effect:</strong> {STAT_TYPE_DESCRIPTIONS[c.statType] || c.statType}
-        </p>
-        <p className="conditional-tooltip-applies">
-          <strong>Applies to:</strong>{' '}
-          {c.appliesToAbility === 'ALL' ? "all of this character's abilities" : c.appliesToAbility}
-        </p>
-        {c.valuesByStack.length > 1 ? (
-          <ul className="conditional-tooltip-stacks">
-            {c.valuesByStack.map((v, i) => (
-              <li key={i}>
-                Stack {i + 1}: +{v}%
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="conditional-tooltip-value">
-            <strong>Value:</strong> +{c.valuesByStack[0] ?? 0}%
-          </p>
+    <span
+      className="conditional-help-wrap"
+      onMouseEnter={showTooltip}
+      onMouseLeave={hideTooltip}
+      onFocus={showTooltip}
+      onBlur={hideTooltip}
+    >
+      <span ref={iconRef} className="conditional-help-icon" tabIndex={0}>
+        ?
+      </span>
+      {tooltipPos &&
+        createPortal(
+          <div
+            className="conditional-tooltip conditional-tooltip-portal"
+            style={{
+              left: tooltipPos.left,
+              bottom: tooltipPos.bottom,
+              width: tooltipPos.width,
+            }}
+          >
+            <p className="conditional-tooltip-trigger">{c.trigger || '(no description provided)'}</p>
+            <p className="conditional-tooltip-effect">
+              <strong>Effect:</strong> {STAT_TYPE_DESCRIPTIONS[c.statType] || c.statType}
+            </p>
+            <p className="conditional-tooltip-applies">
+              <strong>Applies to:</strong>{' '}
+              {c.appliesToAbility === 'ALL' ? "all of this character's abilities" : c.appliesToAbility}
+            </p>
+            {c.valuesByStack.length > 1 ? (
+              <ul className="conditional-tooltip-stacks">
+                {c.valuesByStack.map((v, i) => (
+                  <li key={i}>
+                    Stack {i + 1}: +{v}%
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="conditional-tooltip-value">
+                <strong>Value:</strong> +{c.valuesByStack[0] ?? 0}%
+              </p>
+            )}
+          </div>,
+          document.body
         )}
-      </div>
     </span>
   );
 }

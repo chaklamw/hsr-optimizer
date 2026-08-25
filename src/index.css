@@ -681,6 +681,7 @@ h1 {
   max-width: 520px;
   max-height: 85vh;
   overflow-y: auto;
+  overflow-x: hidden;
   box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.7);
 }
 
@@ -1093,10 +1094,6 @@ h1 {
 }
 
 .conditional-tooltip {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 0;
-  width: min(280px, calc(100vw - 64px));
   background: var(--panel);
   border: 1px solid var(--panel-border);
   border-radius: 8px;
@@ -1105,16 +1102,29 @@ h1 {
   line-height: 1.5;
   color: var(--text-dim);
   box-shadow: 0 12px 28px -12px rgba(0, 0, 0, 0.6);
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(4px);
-  transition: opacity 0.15s ease, transform 0.15s ease;
-  z-index: 20;
 }
 
-.conditional-help-wrap:hover .conditional-tooltip {
-  opacity: 1;
-  transform: translateY(0);
+/* Rendered through a portal into document.body and positioned in JS
+   (see ConditionalHelpTooltip), so it's fixed to the viewport rather than
+   absolute inside whatever scrollable menu the "?" icon happens to sit in.
+   This is what keeps a tooltip near the edge of the damage calculator menu
+   from ever widening that menu's scrollable content and forcing an
+   unwanted horizontal scrollbar. */
+.conditional-tooltip-portal {
+  position: fixed;
+  z-index: 1000;
+  animation: conditional-tooltip-in 0.12s ease;
+}
+
+@keyframes conditional-tooltip-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .conditional-tooltip-trigger {
