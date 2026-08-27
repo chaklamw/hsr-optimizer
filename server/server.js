@@ -246,6 +246,20 @@ function sanitizeConditionals(rawConditionals) {
       const appliesToAbility = VALID_ABILITY_TARGETS.has(c.appliesToAbility) ? c.appliesToAbility : 'ALL';
       if (appliesToAbility !== c.appliesToAbility) suspicious = true;
 
+      // Free-form (not an enum) — this names a specific ability/state, e.g.
+      // "Bloom! Winner Takes All", so there's nothing to validate against
+      // beyond "is it a non-empty string." Left as null whenever the model
+      // omits it or the bonus isn't scoped to one specific named ability.
+      const restrictedToAbilityName =
+        typeof c.restrictedToAbilityName === 'string' && c.restrictedToAbilityName.trim()
+          ? c.restrictedToAbilityName.trim()
+          : null;
+
+      // Stamped server-side in extractOneAbility, not by the model — just
+      // pass it through untouched. No validation needed since it never
+      // came from AI output in the first place.
+      const sourceAbilityName = typeof c.sourceAbilityName === 'string' ? c.sourceAbilityName : null;
+
       const statType = VALID_STAT_TYPES.has(c.statType) ? c.statType : 'OTHER';
       if (statType !== c.statType) suspicious = true;
 
@@ -256,6 +270,8 @@ function sanitizeConditionals(rawConditionals) {
         return {
           name: c.name.trim(),
           appliesToAbility,
+          restrictedToAbilityName,
+          sourceAbilityName,
           statType,
           trigger,
           valuesByStack: [],
@@ -274,10 +290,18 @@ function sanitizeConditionals(rawConditionals) {
 
       const triggerNumbers = extractPercentNumbersFromText(c.trigger);
       const hasInvalidEntry = valuesByStack.some((v) => v === null);
-      // If the trigger text names more distinct percentages than the
-      // structured array has entries, the array is almost certainly
-      // incomplete/mangled rather than genuinely single-valued.
-      const structuredLooksIncomplete = triggerNumbers.length > 1 && triggerNumbers.length !== valuesByStack.length;
+      // A trigger summarizing a stepped/continuous effect ("X% per unit,
+      // up to Y%") will often only state its two endpoints even when the
+      // structured array correctly enumerates every step in between — so a
+      // plain length mismatch alone isn't evidence of a mangled array.
+      // Only treat it as incomplete when the trigger's own numbers aren't
+      // even present anywhere in the structured values (i.e. the model's
+      // array and its own trigger text actively disagree), not just
+      // whenever they differ in element count.
+      const triggerNumbersAccountedFor = triggerNumbers.every((tn) =>
+        valuesByStack.some((v) => v !== null && Math.abs(v - tn) < 0.01)
+      );
+      const structuredLooksIncomplete = triggerNumbers.length > 1 && !triggerNumbersAccountedFor;
 
       if ((hasInvalidEntry || structuredLooksIncomplete) && triggerNumbers.length > 0) {
         valuesByStack = triggerNumbers;
@@ -311,6 +335,8 @@ function sanitizeConditionals(rawConditionals) {
       return {
         name: c.name.trim(),
         appliesToAbility,
+        restrictedToAbilityName,
+        sourceAbilityName,
         statType,
         trigger,
         valuesByStack,
@@ -341,7 +367,7 @@ async function callGroqJson({ systemPrompt, userPrompt, reasoningEffort = 'low',
         Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
       },
       body: JSON.stringify({
-        model: 'openai/gpt-oss-20b',
+        model: 'openai/gpt-oss-120b',
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
@@ -416,11 +442,28 @@ async function callGroqJson({ systemPrompt, userPrompt, reasoningEffort = 'low',
     };
   }
 
-  return { parsed };
+  return { parsed, totalTokens: groqData.usage?.total_tokens ?? null };
 }
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Reactive retry (waiting out a 429's retry-after) already exists below,
+// but it's after-the-fact — by the time a 429 comes back, a round trip is
+// already wasted and however many seconds Groq says to wait are added on
+// top. Pacing proactively BEFORE each call, based on the ACTUAL token cost
+// of the call just made (not a guessed constant), means a long per-ability
+// extraction loop is far less likely to trip the limit at all. This reuses
+// GROQ_TPM_LIMIT/GROQ_TPM_SAFETY_MARGIN (the same budget used for
+// max_tokens trimming above) so there's one place to update if the
+// account's tier — and therefore its TPM budget — ever changes.
+function pacingDelayMs(lastCallTotalTokens) {
+  const effectiveBudget = GROQ_TPM_LIMIT - GROQ_TPM_SAFETY_MARGIN;
+  // If usage wasn't reported for some reason, fall back to a conservative
+  // estimate rather than skipping the pace entirely.
+  const tokens = lastCallTotalTokens || GROQ_TPM_LIMIT * 0.4;
+  return Math.ceil((tokens / effectiveBudget) * 60000);
 }
 
 // TPM is a rolling per-minute budget, not a per-request cap — Groq
@@ -595,7 +638,7 @@ Third, check whether this ability's own action is actually what deals the damage
 });
 
 const CONDITIONAL_SYSTEM_PROMPT = `You are extracting structured conditional damage bonuses from a single Honkai: Star Rail ability description. Respond with ONLY a JSON object in this exact shape, no other text, no markdown formatting, no code fences:
-{"conditionals": [{"name": string, "appliesToAbility": string, "statType": string, "trigger": string, "valuesByStack": number[], "maxStacks": number, "overflow": {"resourceLabel": string, "primaryStat": string, "primaryRatePerPoint": number, "capPercent": number, "secondaryStat": string, "secondaryRatePerPoint": number} | null}]}
+{"conditionals": [{"name": string, "appliesToAbility": string, "restrictedToAbilityName": string | null, "statType": string, "trigger": string, "valuesByStack": number[], "maxStacks": number, "overflow": {"resourceLabel": string, "primaryStat": string, "primaryRatePerPoint": number, "capPercent": number, "secondaryStat": string, "secondaryRatePerPoint": number} | null}]}
 If no qualifying conditional effects are found in this ability, respond with {"conditionals": []}.`;
 
 const CONDITIONAL_EXTRACTION_RULES = `Find any effects where the character's DMG (or a specific ability's DMG) increases conditionally — for example, stacking bonuses from repeated casts, threshold-based bonuses (e.g. "when HP is above/below X%"), or state-based bonuses. If an effect is worded as buffing "all allies," "the team," or similar, still extract it as applying to this character — the wearer/character being analyzed is a member of their own ally list and receives effects worded that way, even though the text doesn't say "the wearer" directly. Do not skip an effect just because it's phrased as team-wide support rather than self-targeted.
@@ -606,6 +649,8 @@ Ignore effects that are flat, always-on increases to the CHARACTER's own stats w
 
 Also ignore effects where an ability's DMG multiplier itself escalates across successive casts/activations of that SAME ability (e.g. "cast a second time to deal DMG equal to X% of ATK, DMG multiplier increased progressively to 39.2%/47.6% on the second and third cast") — this describes the ability's own base scaling per activation, not a separate stacking DMG bonus layered on top of it. That per-activation multiplier is already read directly from the ability's own level-scaling data elsewhere in this tool, so re-extracting it as a DMG_PERCENT conditional would double-count it on top of the correct value. This applies specifically to an ability restating its OWN multiplier per cast — it does NOT apply to a genuinely separate bonus that happens to also scale with cast count (e.g. "each cast of this ability also grants a stack of RES PEN to all allies, up to 3 stacks" describes a different, additive effect and should still be extracted normally).
 
+Also ignore an ability's own direct damage-dealing clause, even when it's gated by a trigger condition. If a sentence describes THIS action (or a separately-named sub-effect it sets off) actually dealing damage — look for the verb "deals" / "dealing" describing damage happening, e.g. "deals X DMG equal to Y% of [ATK/DEF/HP]", "deals N additional instance(s) of DMG", "deals 1 extra instance of X% Elation DMG" — this is a base damage instance (a hit occurring), not a conditional bonus, REGARDLESS of what triggers it (a made-up example: "when a summon disappears, deals Fire DMG equal to 56% of Max HP"; another: "for every 1 instance of 'Example Proc' triggered, deals 1 extra instance of 25% Elation DMG to 1 random enemy") and REGARDLESS of which stat or damage type it scales off (this applies just as much to Elation DMG, which doesn't scale off ATK/DEF/HP at all, as it does to standard DMG). Watch out especially for "for every 1 [trigger], deals an extra instance/hit of DMG" phrasing — it looks identical in shape to a legitimate "for every 1 [trigger], DMG increases by X%" stacking bonus (which SHOULD be extracted), so don't let the "for every" framing alone decide it; check the verb. This is handled by a separate part of the pipeline that reads the damage-dealing action's own damage type and scaling stat directly, so extracting it here as a DMG_PERCENT conditional would misrepresent a hit as a stacking/multiplier bonus, and typically at the wrong scaling stat and magnitude besides. The distinguishing question is always: does this sentence describe an amount of damage being DEALT (a hit happening), or does it describe an EXISTING hit's damage being INCREASED/MULTIPLIED by some percentage? Only the latter is a conditional worth extracting.
+
 An effect scoped to an enemy state — "enemies with a debuff," "enemies with at least N debuffs," "enemies afflicted with [element] Weakness Break," and similar — is conditional even though it isn't phrased as "when X happens" the way a threshold or stacking trigger is. Don't mistake this phrasing for an unconditional flat bonus just because it lacks an obvious "when" clause; the condition is "does the current target qualify," and it should be extracted with a trigger description naming that condition (e.g. "enemy target has at least 1 debuff").
 
 Some effects list multiple mutually-exclusive threshold tiers using slash-separated values, e.g. "if SPD is less than 110/95, increases CRIT Rate by 20%/32%" (a weaker bonus at an easier threshold, a stronger bonus at a stricter threshold — only one applies at a time, not both). Represent these using valuesByStack the same way as ordinary stacks: valuesByStack: [20, 32], maxStacks: 2, with the trigger text explaining what each tier requires (e.g. "Tier 1: SPD < 110 -> +20% CRIT Rate. Tier 2 (stricter): SPD < 95 -> +32% CRIT Rate"). Do not skip this kind of effect just because it isn't literally "stacking" — picking a single tier value is exactly how this calculator already applies a selected value, so tiers fit the same structure.
@@ -613,7 +658,8 @@ Some effects list multiple mutually-exclusive threshold tiers using slash-separa
 Some effects convert a per-point resource into TWO different stats via a dynamic threshold: the resource fills a primary stat at a fixed rate per point until that stat reaches a cap (usually 100%), and any remaining points switch to boosting a second stat instead (e.g. "Each point of X increases CRIT Rate by 0.4%. After CRIT Rate reaches 100%, each remaining point increases CRIT DMG by 0.8% instead."). This does NOT fit the valuesByStack shape, since the split point depends on the character's stat value from other sources, which can't be known in advance. For an effect shaped exactly like this: set statType to "STAT_OVERFLOW_SPLIT", set valuesByStack to [] and maxStacks to 0, and fill the "overflow" field instead: resourceLabel is the name of the resource being converted (e.g. "Punchline", or whatever the ability calls it); primaryStat and secondaryStat are each one of "DMG_PERCENT", "CRIT_RATE", "CRIT_DMG", "ATK_PERCENT" (primaryStat is whichever one fills first); primaryRatePerPoint and secondaryRatePerPoint are the percent gained per point (e.g. 0.4 and 0.8, not 0.004/0.008); capPercent is the value the primary stat must reach before overflow starts (usually 100, but use whatever the text actually says). For every other conditional, set "overflow" to null.
 
 For each conditional effect found, determine:
-- appliesToAbility: which ability type it affects — must be exactly one of "BASIC", "SKILL", "ULT", "FUA", "DOT", or "ALL" if it affects all of the character's damage. Use "ALL" for Talent/passive-sourced DMG Boosts that aren't scoped to one specific attack type — do not invent other category names.
+- appliesToAbility: which ability type the bonus MODIFIES/TARGETS — must be exactly one of "BASIC", "SKILL", "ULT", "FUA", "DOT", or "ALL" if it affects all of the character's damage. This is about which ability the bonus applies TO, not which ability's own description text the bonus happened to be written under — a Skill's or Talent's text can grant a bonus to a completely different ability type (commonly Basic ATK), so don't default to the type of the ability currently being read just because that's where the sentence appears. Use "ALL" for Talent/passive-sourced DMG Boosts that aren't scoped to one specific attack type — do not invent other category names.
+- restrictedToAbilityName: some characters have more than one ability sharing the same broad type (e.g. an ordinary Basic ATK and a separately-named "Enhanced" or transformed Basic ATK that replaces it under some state — both still count as appliesToAbility "BASIC", but they are functionally different attacks). If this conditional's trigger text explicitly names ONE specific ability/state in quotation marks that the bonus applies to — rather than describing the whole appliesToAbility category broadly — set restrictedToAbilityName to that name exactly as written. A worked example close to real phrasing you will see: 'Causes "Radiant Flourish" to increase the DMG multiplier against one designated enemy by 20% and the DMG multiplier against adjacent targets by 10%' — here the bonus is explicitly and only about hits from "Radiant Flourish", so restrictedToAbilityName must be set to "Radiant Flourish" (do not leave it null just because the sentence also mentions other unrelated things, like gaining resource points elsewhere in the same ability's text — extract those as separate line items and don't let them distract from setting this field on the DMG-multiplier one). This is different from a stacking trigger that's merely caused by using that named ability (another made-up example: "each time a summon uses 'Example Strike', DMG dealt increases..." is a stack-granting trigger that boosts ALL of the character's damage broadly, not a bonus restricted to only that named ability — that case should still use restrictedToAbilityName: null, since the DMG boost itself isn't scoped to that one attack). Only set this field when the bonus itself is exclusively applied to hits from that one named ability. Otherwise, always set restrictedToAbilityName to null. This field is about SCOPING a bonus to one named attack among several sharing a type — it has nothing to do with whether an effect qualifies as a conditional in the first place; see the base-damage exclusion rule above for that. Do not treat the mere presence of a quoted name in the trigger text as evidence that this field should be set — most quoted names (state names, buff names, summon names) are unrelated to which attack a bonus is scoped to; only set it when the quoted name is specifically an ATTACK/ABILITY that the DMG bonus is restricted to.
 - statType: what it boosts — one of "DMG_PERCENT", "CRIT_RATE", "CRIT_DMG", "ATK_PERCENT", "DEF_PEN", "RES_PEN", "VULNERABILITY", "STAT_OVERFLOW_SPLIT" (see above), or "OTHER" if none of these fit
 - trigger: a short plain-English description of the condition
 - valuesByStack: an array of the bonus values in percent (e.g. 20 means +20%, not 0.2 and not 2000), indexed by stack count starting at 1 (e.g. [100, 200] means 1 stack = 100%, 2 stacks = 200%). If it's not stack-based but a single on/off condition, use a single-element array. The array length must exactly equal maxStacks. IMPORTANT: descriptions phrased as "+X% per stack, up to N stacks" are still cumulative and must be expanded to the full N-element array (e.g. "25% per stack, up to 3 stacks" -> valuesByStack: [25, 50, 75], maxStacks: 3) — never respond with just the single per-stack number. If the effect scales continuously (e.g. "+X% DMG per 1% Max HP lost, up to Y%") rather than in discrete stacks, represent only the minimum and maximum bound as a 2-element array with maxStacks 2, and say so in the trigger text — do not invent intermediate stack values. Leave this as [] for STAT_OVERFLOW_SPLIT effects (use the overflow field instead).
@@ -657,7 +703,17 @@ ${CONDITIONAL_EXTRACTION_RULES}`;
     console.log(`[${ability.type}] extracted ${parsed.conditionals.length}:`, JSON.stringify(parsed.conditionals, null, 2));
   }
 
-  return { conditionals: parsed.conditionals, failed: false };
+  // Stamped here (plain code, not asked of the model) so downstream
+  // duplicate-detection against getPerHitTargetStackingBonus's regex-found
+  // sourceName has something deterministic to compare against, instead of
+  // depending on the model reliably naming the right ability in
+  // restrictedToAbilityName — which has proven inconsistent run to run.
+  const conditionalsWithSource = parsed.conditionals.map((c) => ({
+    ...c,
+    sourceAbilityName: ability.name || null,
+  }));
+
+  return { conditionals: conditionalsWithSource, failed: false, totalTokens: result.totalTokens };
 }
 
 // Takes a character's resolved ability descriptions (Basic ATK, Skill,
@@ -717,6 +773,12 @@ app.post('/api/extract-conditionals', async (req, res) => {
 
     let callsAttempted = 0;
     let callsFailed = 0;
+    // Tracks the actual token cost of the most recent real Groq call made
+    // during this request (kit or equipment) so pacingDelayMs can size the
+    // wait before the NEXT call off real data instead of a guess. Stays
+    // null until the first real call happens — a cache hit never touches
+    // this, since it doesn't cost anything against the TPM budget.
+    let lastCallTokens = null;
 
     let characterConditionals;
     let kitFromCache = false;
@@ -730,9 +792,10 @@ app.post('/api/extract-conditionals', async (req, res) => {
     } else {
       const kitRaw = [];
       for (let i = 0; i < kitAbilities.length; i++) {
-        if (i > 0) await sleep(600);
+        if (lastCallTokens !== null) await sleep(pacingDelayMs(lastCallTokens));
         callsAttempted += 1;
-        const { conditionals, failed } = await extractOneAbility(kitAbilities[i], characterName);
+        const { conditionals, failed, totalTokens } = await extractOneAbility(kitAbilities[i], characterName);
+        lastCallTokens = totalTokens ?? lastCallTokens;
         if (failed) {
           callsFailed += 1;
           continue;
@@ -767,9 +830,10 @@ app.post('/api/extract-conditionals', async (req, res) => {
         continue;
       }
 
-      if (!kitFromCache || i > 0) await sleep(600);
+      if (lastCallTokens !== null) await sleep(pacingDelayMs(lastCallTokens));
       callsAttempted += 1;
-      const { conditionals, failed } = await extractOneAbility(ability, null);
+      const { conditionals, failed, totalTokens } = await extractOneAbility(ability, null);
+      lastCallTokens = totalTokens ?? lastCallTokens;
       if (failed) {
         callsFailed += 1;
         continue;

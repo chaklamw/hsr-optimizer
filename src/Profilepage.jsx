@@ -350,11 +350,12 @@ function getHitTargetLabel(desc, paramIndex) {
 // X% ... adjacent targets by Y%" pattern, and returns the per-trigger
 // bonus for each side plus which ability it came from, so the UI can
 // label the input meaningfully without hardcoding a character name.
+const PER_HIT_TARGET_STACKING_PATTERN =
+  /multiplier against one designated enemy by ([\d.]+)%(?:[^%]*?multiplier against adjacent targets by ([\d.]+)%)?/i;
+
 function getPerHitTargetStackingBonus(abilities) {
   for (const a of abilities) {
-    const match = a.desc.match(
-      /multiplier against one designated enemy by ([\d.]+)%(?:[^%]*?multiplier against adjacent targets by ([\d.]+)%)?/i
-    );
+    const match = a.desc.match(PER_HIT_TARGET_STACKING_PATTERN);
     if (match) {
       return {
         sourceName: a.name,
@@ -364,6 +365,36 @@ function getPerHitTargetStackingBonus(abilities) {
     }
   }
   return null;
+}
+
+// An AI-extracted (or manual) conditional restricted to a specific ability
+// (via restrictedToAbilityName) duplicates what the dedicated
+// "{ability} triggers" input above already covers whenever that target
+// ability is BOTH one of this character's own multi-hit-target attacks
+// AND already has a per-hit-target-stacking source found for it — in that
+// case, the conditional is virtually certainly describing the exact same
+// mechanic getPerHitTargetStackingBonus already extracted structurally
+// from the raw kit text, just expressed as prose. Deliberately does NOT
+// pattern-match the conditional's own trigger text against
+// PER_HIT_TARGET_STACKING_PATTERN — extraction paraphrases trigger
+// descriptions rather than preserving the source ability's exact wording,
+// so that comparison isn't reliable; restrictedToAbilityName is a
+// structured field and holds up instead.
+function isDuplicatePerHitTargetConditional(conditional, multiHitAbilityNames, perHitStackingBonus) {
+  if (!perHitStackingBonus || !conditional) return false;
+  // sourceAbilityName is stamped server-side from plain code (which ability's
+  // text this conditional was extracted from), not inferred by the model —
+  // so it's a reliable match against perHitStackingBonus's own sourceName
+  // (found the same deterministic way, via regex on raw kit text) even on
+  // runs where the model's restrictedToAbilityName came back null or
+  // reworded. Checked first since it doesn't depend on AI output at all.
+  if (conditional.sourceAbilityName && conditional.sourceAbilityName === perHitStackingBonus.sourceName) {
+    return true;
+  }
+  // Fallback for older cached entries extracted before sourceAbilityName
+  // existed — still useful when the model happened to get
+  // restrictedToAbilityName right.
+  return !!conditional.restrictedToAbilityName && multiHitAbilityNames.has(conditional.restrictedToAbilityName);
 }
 
 const ELEMENT_DMG_TYPE = {
@@ -406,9 +437,26 @@ const TYPE_TEXT_TO_ABILITY = {
   Skill: 'SKILL',
   Ultimate: 'ULT',
   Talent: 'FUA',
+  // Memosprite Skill (e.g. Castorice's Netherwing) and Elation Skill
+  // (Path of Elation characters) are both skill-type actions as far as the
+  // extraction endpoint's VALID_ABILITY_TARGETS enum is concerned — the AI
+  // extractor never returns anything more specific than 'SKILL' for them,
+  // so a conditional scoped to 'SKILL' should still match these.
+  'Memosprite Skill': 'SKILL',
+  'Elation Skill': 'SKILL',
 };
 
-function conditionalAppliesToSkill(conditional, skillTypeText) {
+function conditionalAppliesToSkill(conditional, skillTypeText, skillName) {
+  // A conditional whose bonus is scoped to one specific named ability
+  // variant (e.g. Sparxie's "Bloom! Winner Takes All", an enhanced Basic
+  // ATK that shares type_text "Basic ATK" with her ordinary Basic ATK)
+  // must match that exact ability, not just its broad type — otherwise a
+  // bonus meant only for the enhanced attack silently also applies to the
+  // un-enhanced one. This check runs before the ALL/type-text checks below
+  // since it's strictly narrower than either of them.
+  if (conditional.restrictedToAbilityName) {
+    return conditional.restrictedToAbilityName === skillName;
+  }
   if (conditional.appliesToAbility === 'ALL') return true;
   return conditional.appliesToAbility === TYPE_TEXT_TO_ABILITY[skillTypeText];
 }
@@ -513,7 +561,11 @@ function ConditionalHelpTooltip({ c }) {
             </p>
             <p className="conditional-tooltip-applies">
               <strong>Applies to:</strong>{' '}
-              {c.appliesToAbility === 'ALL' ? "all of this character's abilities" : c.appliesToAbility}
+              {c.restrictedToAbilityName
+                ? `"${c.restrictedToAbilityName}" only`
+                : c.appliesToAbility === 'ALL'
+                ? "all of this character's abilities"
+                : c.appliesToAbility}
             </p>
             {c.valuesByStack.length > 1 ? (
               <ul className="conditional-tooltip-stacks">
@@ -878,15 +930,49 @@ function computeScenarioTotalDamage(stats, scenario) {
     ? stats.genericStats.ElationDamageAddedRatio * 100
     : 0;
 
+  // Moved ahead of matchedAll below (rather than staying inline with the
+  // rest of the hit-index/multiplier logic further down) because excluding
+  // duplicate per-hit-target conditionals needs to know whether THIS
+  // ability has a dedicated stacking bonus before matchedAll is built.
+  const damagePercentIndices = getDamagePercentParamIndices(skill.desc);
+  const hitIndices = damagePercentIndices.length > 0 ? damagePercentIndices : [0];
+  const hasMultipleHitValues = hitIndices.length > 1;
+  const allAbilities = (skillIds || [])
+    .map((id) => characterSkills[id])
+    .filter(Boolean)
+    .map((s) => ({
+      name: s.name,
+      desc: formatLightConeDesc(s.desc, s.params[s.params.length - 1]) || s.desc || '',
+    }))
+    .filter((a) => a.desc);
+  const perHitStackingBonus = hasMultipleHitValues ? getPerHitTargetStackingBonus(allAbilities) : null;
+
   const breathLinkedGroup = findBreathLinkedGroup(characterSkills, skillIds);
   const linkedTraceConditional = findLinkedTraceConditional(
     [...aiConditionals, ...manualConditionals],
     breathLinkedGroup?.name
   );
 
+  // Only this ability's own name is relevant here (not a roster-wide set,
+  // unlike the global toggle-list version of this check further down) —
+  // hasMultipleHitValues already confirms skill.name IS a multi-hit-target
+  // attack, so a conditional restricted to some OTHER ability could never
+  // match perHitStackingBonus's coverage of this one anyway.
+  const multiHitAbilityNamesForThisSkill = hasMultipleHitValues ? new Set([skill.name]) : new Set();
+
   const matchedAll = [
-    ...aiConditionals.filter((c) => conditionalAppliesToSkill(c, skill.type_text) && c !== linkedTraceConditional),
-    ...manualConditionals.filter((c) => conditionalAppliesToSkill(c, skill.type_text) && c !== linkedTraceConditional),
+    ...aiConditionals.filter(
+      (c) =>
+        conditionalAppliesToSkill(c, skill.type_text, skill.name) &&
+        c !== linkedTraceConditional &&
+        !isDuplicatePerHitTargetConditional(c, multiHitAbilityNamesForThisSkill, perHitStackingBonus)
+    ),
+    ...manualConditionals.filter(
+      (c) =>
+        conditionalAppliesToSkill(c, skill.type_text, skill.name) &&
+        c !== linkedTraceConditional &&
+        !isDuplicatePerHitTargetConditional(c, multiHitAbilityNamesForThisSkill, perHitStackingBonus)
+    ),
   ];
   const sumConditionalStat = (statType) =>
     matchedAll.reduce((sum, c) => {
@@ -965,9 +1051,6 @@ function computeScenarioTotalDamage(stats, scenario) {
       ? scalingValue * (1 + aiAtkPercentBonus / 100)
       : scalingValue;
 
-  const damagePercentIndices = getDamagePercentParamIndices(skill.desc);
-  const hitIndices = damagePercentIndices.length > 0 ? damagePercentIndices : [0];
-  const hasMultipleHitValues = hitIndices.length > 1;
   const selectedHitIndex = hitIndices.includes(calcParamIndex) ? calcParamIndex : hitIndices[0];
 
   const baseMultiplier = levelParams[selectedHitIndex];
@@ -977,15 +1060,6 @@ function computeScenarioTotalDamage(stats, scenario) {
     ? activationMultipliers[Math.min(calcActivationIndex, activationMultipliers.length - 1)]
     : baseMultiplier;
 
-  const allAbilities = (skillIds || [])
-    .map((id) => characterSkills[id])
-    .filter(Boolean)
-    .map((s) => ({
-      name: s.name,
-      desc: formatLightConeDesc(s.desc, s.params[s.params.length - 1]) || s.desc || '',
-    }))
-    .filter((a) => a.desc);
-  const perHitStackingBonus = hasMultipleHitValues ? getPerHitTargetStackingBonus(allAbilities) : null;
   const getStackingDmgPercent = (hitIdx) => {
     if (!perHitStackingBonus) return 0;
     const perStack = hitIdx === hitIndices[0] ? perHitStackingBonus.mainPerStack : perHitStackingBonus.adjacentPerStack;
@@ -1090,6 +1164,12 @@ export default function ProfilePage() {
   const [paths, setPaths] = useState({});
   const [relicMainAffixes, setRelicMainAffixes] = useState({});
   const [characterSkills, setCharacterSkills] = useState({});
+  // TEMP DEBUG — remove after diagnosing Sparxie's Basic ATK naming. Exposes
+  // characterSkills to the console since it's otherwise trapped in this
+  // component's closure and unreachable from devtools directly.
+  useEffect(() => {
+    window.__debugCharacterSkills = characterSkills;
+  }, [characterSkills]);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadedCount, setLoadedCount] = useState(0);
@@ -1197,6 +1277,7 @@ export default function ProfilePage() {
       .map((s) => ({
         type: s.type_text || 'Ability',
         description: formatLightConeDesc(s.desc, s.params[s.params.length - 1]) || s.desc,
+        name: s.name,
       }))
       .filter((a) => a.description)
       // Characters with multiple skill IDs sharing a name (e.g. Castorice's
@@ -1227,6 +1308,7 @@ export default function ProfilePage() {
         abilities.push({
           type: 'Light Cone Passive',
           description: `${lcName} (Superimposition ${equipment.rank}): ${lcDesc}`,
+          name: lcName,
         });
       }
     }
@@ -1255,12 +1337,14 @@ export default function ProfilePage() {
         abilities.push({
           type: 'Relic Set (2pc)',
           description: `${set.name} (2pc): ${set.desc[0]}`,
+          name: set.name,
         });
       }
       if (count >= 4 && set.desc[1] && isDamageRelevantText(set.desc[1])) {
         abilities.push({
           type: 'Relic Set (4pc)',
           description: `${set.name} (4pc): ${set.desc[1]}`,
+          name: set.name,
         });
       }
     });
@@ -1282,6 +1366,7 @@ export default function ProfilePage() {
         abilities.push({
           type: 'Trace',
           description: `${treeInfo.name || 'Trace'}: ${desc}`,
+          name: treeInfo.name || 'Trace',
         });
       }
     });
@@ -2042,6 +2127,28 @@ export default function ProfilePage() {
                   }))
                   .filter((a) => a.desc);
                 const perHitStackingBonus = getPerHitTargetStackingBonus(allAbilities);
+                // Character-wide set of ability names that have their own
+                // multiple hit-target values (main + adjacent, etc.) — used
+                // to decide whether a restrictedToAbilityName conditional
+                // duplicates perHitStackingBonus's coverage, same signal as
+                // the per-row check above but scoped to the whole roster
+                // since this list isn't tied to one selected row.
+                const multiHitAbilityNames = new Set(
+                  skillIds
+                    .map((id) => characterSkills[id])
+                    .filter(Boolean)
+                    .filter((s) => getDamagePercentParamIndices(s.desc).length > 1)
+                    .map((s) => s.name)
+                );
+                // TEMP DEBUG — remove after diagnosing Sparxie's missing
+                // "Engagement Farming triggers" input.
+                window.__debugPerHitStackingBonus = perHitStackingBonus;
+                window.__debugMultiHitAbilityNames = Array.from(multiHitAbilityNames);
+                window.__debugAllAbilities = allAbilities;
+                window.__debugRotationRows = rotationRows.map((row) => ({
+                  skillId: row.skillId,
+                  name: characterSkills[row.skillId]?.name,
+                }));
 
                 const allConditionals = [...aiConditionals, ...manualConditionals];
                 const overflowConditional = allConditionals.find(
@@ -2293,7 +2400,7 @@ export default function ProfilePage() {
                       )}
 
                       {aiConditionals
-                        .filter((c) => c.statType !== 'STAT_OVERFLOW_SPLIT' && c !== linkedTraceConditional)
+                        .filter((c) => c.statType !== 'STAT_OVERFLOW_SPLIT' && c !== linkedTraceConditional && !isDuplicatePerHitTargetConditional(c, multiHitAbilityNames, perHitStackingBonus))
                         .map((c) => (
                           <div key={c.name} className="compare-form-row ai-conditional-row">
                             <div>
@@ -2329,7 +2436,7 @@ export default function ProfilePage() {
                         ))}
 
                       {manualConditionals
-                        .filter((c) => c.statType !== 'STAT_OVERFLOW_SPLIT' && c !== linkedTraceConditional)
+                        .filter((c) => c.statType !== 'STAT_OVERFLOW_SPLIT' && c !== linkedTraceConditional && !isDuplicatePerHitTargetConditional(c, multiHitAbilityNames, perHitStackingBonus))
                         .map((c) => (
                           <div key={c.name} className="compare-form-row ai-conditional-row">
                             <div>
@@ -2488,17 +2595,18 @@ export default function ProfilePage() {
                             {' '}Enemy is Toughness Broken
                           </label>
                         </div>
-                        {perHitStackingBonus && (
-                          <div className="compare-weight-row">
-                            <span>{perHitStackingBonus.sourceName} triggers</span>
-                            <input
-                              type="number"
-                              min="0"
-                              value={calcStackingTriggers}
-                              onChange={(e) => setCalcStackingTriggers(Math.max(0, Number(e.target.value) || 0))}
-                            />
-                          </div>
-                        )}
+                        {perHitStackingBonus &&
+                          rotationRows.some((row) => multiHitAbilityNames.has(characterSkills[row.skillId]?.name)) && (
+                            <div className="compare-weight-row">
+                              <span>{perHitStackingBonus.sourceName} triggers</span>
+                              <input
+                                type="number"
+                                min="0"
+                                value={calcStackingTriggers}
+                                onChange={(e) => setCalcStackingTriggers(Math.max(0, Number(e.target.value) || 0))}
+                              />
+                            </div>
+                          )}
                         <div className="compare-weight-row">
                           <span>Enemies hit</span>
                           <input

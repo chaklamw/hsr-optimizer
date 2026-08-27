@@ -61,5 +61,92 @@
       }
     ],
     "extractedAt": "2026-08-24T19:20:07.874Z"
+  },
+  "1ef34cbb3c6687765be6d4a67bb5a52ff421e2c87f679f024a1a05d1696a99ad": {
+    "sourceType": "Light Cone Passive",
+    "conditionals": [
+      {
+        "name": "Elation DMG DEF Ignore",
+        "appliesToAbility": "ALL",
+        "statType": "DEF_PEN",
+        "trigger": "For each Skill Point consumed, increases Elation DMG by ignoring 5% of enemy DEF, up to 4 stacks",
+        "valuesByStack": [
+          5,
+          10,
+          15,
+          20
+        ],
+        "maxStacks": 4,
+        "overflow": null,
+        "suspicious": false,
+        "suspiciousNote": ""
+      }
+    ],
+    "extractedAt": "2026-08-25T19:55:20.205Z"
+  },
+  "21cea97fe45855b1fb5f770b9f8d9b8b0348509f00158ebdd491b6376d1a449c": {
+    "sourceType": "Relic Set (2pc)",
+    "conditionals": [],
+    "extractedAt": "2026-08-25T19:55:39.358Z"
+  },
+  "64d78fb7bf53bd65083a2abfb20005241105bf4a58a9af46e4cf5f94d2da009e": {
+    "sourceType": "Relic Set (4pc)",
+    "conditionals": [
+      {
+        "name": "Elation DMG DEF Ignore (Base)",
+        "appliesToAbility": "ALL",
+        "statType": "DEF_PEN",
+        "trigger": "always active while Ever-Glorious Magical Girl (4pc) set is equipped",
+        "valuesByStack": [
+          10
+        ],
+        "maxStacks": 1,
+        "overflow": null,
+        "suspicious": false,
+        "suspiciousNote": ""
+      },
+      {
+        "name": "Elation DMG DEF Ignore (Punchline Stack)",
+        "appliesToAbility": "ALL",
+        "statType": "DEF_PEN",
+        "trigger": "for every 5 accumulated Punchline allies gain, Elation DMG dealt additionally ignores 1% of targets' DEF, stacking up to 10 times",
+        "valuesByStack": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10
+        ],
+        "maxStacks": 10,
+        "overflow": null,
+        "suspicious": false,
+        "suspiciousNote": ""
+      }
+    ],
+    "extractedAt": "2026-08-25T19:55:55.921Z"
+  },
+  "815b8f167b9493b197b78c6a6bae36acf1454d340dbec25237c0505b3dfc055c": {
+    "sourceType": "Relic Set (2pc)",
+    "conditionals": [
+      {
+        "name": "Tengoku@Livestream (2pc) Conditional CRIT DMG Boost",
+        "appliesToAbility": "ALL",
+        "statType": "CRIT_DMG",
+        "trigger": "If 3 or more Skill Points are consumed in the same turn, increases wearer's CRIT DMG by 32% for 3 turns",
+        "valuesByStack": [
+          32
+        ],
+        "maxStacks": 1,
+        "overflow": null,
+        "suspicious": false,
+        "suspiciousNote": ""
+      }
+    ],
+    "extractedAt": "2026-08-25T19:56:25.619Z"
   }
 }
