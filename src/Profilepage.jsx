@@ -1140,6 +1140,11 @@ function computeRotationTotalDamage(stats, rows, globalScenario) {
       calcDamageType: row.damageType,
       calcScalingStat: row.scalingStat,
       calcNonStatValue: row.nonStatValue,
+      // Per-row rather than shared via globalScenario — two rows both using
+      // "Bloom! Winner Takes All" (or any other per-hit-target-stacking
+      // ability) should be able to represent different trigger counts, not
+      // mirror the same number.
+      calcStackingTriggers: row.stackingTriggers ?? 0,
     };
     const perHit = computeScenarioTotalDamage(stats, rowScenario);
     const rowTotal = perHit != null ? perHit * Math.max(0, row.countPerRotation) : null;
@@ -1164,12 +1169,6 @@ export default function ProfilePage() {
   const [paths, setPaths] = useState({});
   const [relicMainAffixes, setRelicMainAffixes] = useState({});
   const [characterSkills, setCharacterSkills] = useState({});
-  // TEMP DEBUG — remove after diagnosing Sparxie's Basic ATK naming. Exposes
-  // characterSkills to the console since it's otherwise trapped in this
-  // component's closure and unreachable from devtools directly.
-  useEffect(() => {
-    window.__debugCharacterSkills = characterSkills;
-  }, [characterSkills]);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadedCount, setLoadedCount] = useState(0);
@@ -1196,7 +1195,6 @@ export default function ProfilePage() {
   const [calcMerrymakePercent, setCalcMerrymakePercent] = useState(0);
   const [calcEnemyCount, setCalcEnemyCount] = useState(1);
   const [calcEnemyBroken, setCalcEnemyBroken] = useState(true);
-  const [calcStackingTriggers, setCalcStackingTriggers] = useState(0);
   const [aiConditionals, setAiConditionals] = useState([]);
   const [manualConditionals, setManualConditionals] = useState([]);
   const [manualConditionalForm, setManualConditionalForm] = useState({
@@ -1463,6 +1461,7 @@ export default function ProfilePage() {
       scalingError: '',
       nonStatValue: 0,
       damageSourceName: null,
+      stackingTriggers: 0,
     };
     setRotationRows((rows) => [...rows, newRow]);
     detectRowScaling(id, skillId, level);
@@ -1487,6 +1486,11 @@ export default function ProfilePage() {
       scalingStatus: 'idle',
       nonStatValue: 0,
       damageSourceName: null,
+      // Reset rather than carried over — a stale trigger count from
+      // whatever ability this row used to be doesn't make sense once it's
+      // pointed at a different ability, even if the new one happens to
+      // have the same kind of stacking mechanic.
+      stackingTriggers: 0,
     });
     detectRowScaling(id, skillId, level);
   }
@@ -1896,7 +1900,6 @@ export default function ProfilePage() {
                     calcPunchlineValue,
                     calcUsingCertifiedBanger,
                     calcUsingOverflowSplit,
-                    calcStackingTriggers,
                     aiConditionals,
                     manualConditionals,
                     aiConditionalStacks,
@@ -2140,15 +2143,6 @@ export default function ProfilePage() {
                     .filter((s) => getDamagePercentParamIndices(s.desc).length > 1)
                     .map((s) => s.name)
                 );
-                // TEMP DEBUG — remove after diagnosing Sparxie's missing
-                // "Engagement Farming triggers" input.
-                window.__debugPerHitStackingBonus = perHitStackingBonus;
-                window.__debugMultiHitAbilityNames = Array.from(multiHitAbilityNames);
-                window.__debugAllAbilities = allAbilities;
-                window.__debugRotationRows = rotationRows.map((row) => ({
-                  skillId: row.skillId,
-                  name: characterSkills[row.skillId]?.name,
-                }));
 
                 const allConditionals = [...aiConditionals, ...manualConditionals];
                 const overflowConditional = allConditionals.find(
@@ -2230,6 +2224,14 @@ export default function ProfilePage() {
                     !!breathLinkedGroup && !isBreathAbility && skill?.type_text === breathLinkedGroup.typeText;
                   const hasTurnPositionSelector = isBreathAbility || isBreathSibling;
 
+                  // hasMultipleHitValues (above) already confirms THIS row's
+                  // own skill is the multi-hit-target ability — combined
+                  // with perHitStackingBonus being non-null (character has
+                  // a stacking source for it somewhere in kit), that's
+                  // sufficient to know this specific row should show the
+                  // input, without re-deriving it from multiHitAbilityNames.
+                  const hasPerHitStackingInput = hasMultipleHitValues && !!perHitStackingBonus;
+
                   return {
                     skill,
                     resolvedDesc,
@@ -2243,6 +2245,7 @@ export default function ProfilePage() {
                     isBreathAbility,
                     isBreathSibling,
                     hasTurnPositionSelector,
+                    hasPerHitStackingInput,
                   };
                 }
 
@@ -2259,7 +2262,6 @@ export default function ProfilePage() {
                   calcPunchlineValue,
                   calcUsingCertifiedBanger,
                   calcUsingOverflowSplit,
-                  calcStackingTriggers,
                   aiConditionals,
                   manualConditionals,
                   aiConditionalStacks,
@@ -2595,18 +2597,6 @@ export default function ProfilePage() {
                             {' '}Enemy is Toughness Broken
                           </label>
                         </div>
-                        {perHitStackingBonus &&
-                          rotationRows.some((row) => multiHitAbilityNames.has(characterSkills[row.skillId]?.name)) && (
-                            <div className="compare-weight-row">
-                              <span>{perHitStackingBonus.sourceName} triggers</span>
-                              <input
-                                type="number"
-                                min="0"
-                                value={calcStackingTriggers}
-                                onChange={(e) => setCalcStackingTriggers(Math.max(0, Number(e.target.value) || 0))}
-                              />
-                            </div>
-                          )}
                         <div className="compare-weight-row">
                           <span>Enemies hit</span>
                           <input
@@ -2720,6 +2710,32 @@ export default function ProfilePage() {
                                     )
                                   )}
                                 </select>
+                              </div>
+                            )}
+
+                            {meta.hasPerHitStackingInput && (
+                              <div className="compare-form-row">
+                                <span className="calc-inline-label">{perHitStackingBonus.sourceName} triggers</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="20"
+                                  value={row.stackingTriggers ?? 0}
+                                  onChange={(e) =>
+                                    updateRotationRow(row.id, {
+                                      // Capped at 20 to match Sparxie's kit
+                                      // text ("Engagement Farming" can be
+                                      // triggered "up to 20 time(s)").
+                                      // Currently a fixed UI cap rather than
+                                      // parsed from kit text — worth
+                                      // revisiting generically if another
+                                      // character's equivalent mechanic
+                                      // turns out to cap at a different
+                                      // count.
+                                      stackingTriggers: Math.max(0, Math.min(20, Number(e.target.value) || 0)),
+                                    })
+                                  }
+                                />
                               </div>
                             )}
 
