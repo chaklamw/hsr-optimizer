@@ -1,6 +1,6 @@
 import { Routes, Route } from 'react-router-dom';
 import Home from './Home.jsx';
-import ProfilePage from './ProfilePage.jsx';
+import ProfilePage from './Profilepage.jsx';
 
 export default function App() {
   return (
