@@ -13,6 +13,12 @@ const PATHS_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/
 const RELIC_MAIN_AFFIXES_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/relic_main_affixes.json';
 const CHARACTER_SKILLS_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/character_skills.json';
 
+// HSR never puts more than 5 enemies on the field at once, regardless of
+// character or ability — used to cap the "Enemies hit" input so AoE
+// ("hits all enemies") abilities can't be scaled past what's actually
+// possible in game.
+const MAX_BATTLEFIELD_ENEMIES = 5;
+
 const ANCHOR_LABELS = {
   Point01: 'Basic ATK',
   Point02: 'Skill',
@@ -314,32 +320,6 @@ function getInstancedHitInfo(desc) {
   );
   if (!match) return null;
   return { instanceCount: Number(match[1]), perInstancePercent: Number(match[2]) / 100 };
-}
-
-// After finding which param indices are real damage values, this pulls
-// a human-readable target description from the text immediately
-// following each one — "to one designated enemy", "to adjacent
-// targets", "to all enemies", etc. — so the Hit selector can say what
-// each value actually means instead of a bare "Hit 1 / Hit 2".
-const TARGET_PHRASE_PATTERNS = [
-  { pattern: /to one (designated |target(ed)? )?enem(y|ies)/i, label: 'main target' },
-  { pattern: /adjacent (to (it|the target)|enem(y|ies)|targets)/i, label: 'adjacent targets' },
-  { pattern: /to all enem(y|ies)/i, label: 'all enemies' },
-  { pattern: /(to a |a )?random enem(y|ies)/i, label: 'random enemy' },
-  { pattern: /to the target/i, label: 'target' },
-];
-
-function getHitTargetLabel(desc, paramIndex) {
-  if (!desc) return null;
-  const regex = /#(\d+)\[(i|f1|f2)\](%?)/g;
-  let match;
-  while ((match = regex.exec(desc)) !== null) {
-    if (Number(match[1]) - 1 !== paramIndex) continue;
-    const context = desc.slice(match.index, Math.min(desc.length, match.index + 150));
-    const found = TARGET_PHRASE_PATTERNS.find(({ pattern }) => pattern.test(context));
-    return found ? found.label : null;
-  }
-  return null;
 }
 
 // Some characters' main/adjacent (Blast) hits get boosted by a *separate*
@@ -1194,10 +1174,19 @@ function computeScenarioTotalDamage(stats, scenario) {
   const instancedHitDamage = instancedHitInfo ? computeHitDamage(instancedHitInfo.perInstancePercent) : null;
   const instancedHitTotal = instancedHitDamage != null ? instancedHitDamage * instancedHitInfo.instanceCount : null;
 
+  // Blast-pattern abilities (main target + adjacent targets) only ever
+  // hit the main target plus up to 2 enemies adjacent to it — 3 targets
+  // total — no matter how many enemies are actually on the field, since
+  // "adjacent" is a fixed positional relationship, not a count that
+  // scales with battlefield size. Enemies hit beyond that never take the
+  // adjacent-hit damage, so this caps the adjacent multiplier separately
+  // from the overall battlefield cap (MAX_BATTLEFIELD_ENEMIES) below,
+  // which still governs "hits all enemies" abilities.
+  const MAX_BLAST_ADJACENT_ENEMIES = 2;
   const baseTotalDamage = hasMultipleHitValues
     ? (computeHitDamage(levelParams[hitIndices[0]], getStackingDmgPercent(hitIndices[0])) || 0) +
       (computeHitDamage(levelParams[hitIndices[1]], getStackingDmgPercent(hitIndices[1])) || 0) *
-        Math.max(0, calcEnemyCount - 1)
+        Math.max(0, Math.min(MAX_BLAST_ADJACENT_ENEMIES, calcEnemyCount - 1))
     : damage * calcEnemyCount;
 
   return instancedHitTotal != null ? baseTotalDamage + instancedHitTotal : baseTotalDamage;
@@ -2291,10 +2280,6 @@ export default function ProfilePage() {
                   const hitIndices = damagePercentIndices.length > 0 ? damagePercentIndices : [0];
                   const hasMultipleHitValues = hitIndices.length > 1;
                   const selectedHitIndex = hitIndices.includes(row.paramIndex) ? row.paramIndex : hitIndices[0];
-                  const selectedHitTargetLabel =
-                    skill &&
-                    (getHitTargetLabel(skill.desc, selectedHitIndex) ||
-                      (selectedHitIndex === hitIndices[0] ? 'main target' : null));
                   const levelParams = skill ? skill.params[row.skillLevel - 1] || [] : [];
                   const baseMultiplier = levelParams[selectedHitIndex];
                   const escalatingMultipliers = getEscalatingMultipliers(resolvedDesc);
@@ -2325,10 +2310,7 @@ export default function ProfilePage() {
                     skill,
                     resolvedDesc,
                     nonStatScalingLabel,
-                    hitIndices,
                     hasMultipleHitValues,
-                    selectedHitIndex,
-                    selectedHitTargetLabel,
                     activationMultipliers,
                     hasMultipleActivations,
                     isBreathAbility,
@@ -2693,8 +2675,11 @@ export default function ProfilePage() {
                           <input
                             type="number"
                             min="1"
+                            max={MAX_BATTLEFIELD_ENEMIES}
                             value={calcEnemyCount}
-                            onChange={(e) => setCalcEnemyCount(Math.max(1, Number(e.target.value) || 1))}
+                            onChange={(e) =>
+                              setCalcEnemyCount(Math.min(MAX_BATTLEFIELD_ENEMIES, Math.max(1, Number(e.target.value) || 1)))
+                            }
                           />
                         </div>
                       </div>
@@ -2909,27 +2894,6 @@ export default function ProfilePage() {
                                       </div>
                                     )}
                                   </>
-                                )}
-
-                                {meta.hasMultipleHitValues && (
-                                  <div className="compare-form-row">
-                                    <span className="calc-inline-label">Hit</span>
-                                    <select
-                                      value={meta.selectedHitIndex}
-                                      onChange={(e) => updateRotationRow(row.id, { paramIndex: Number(e.target.value) })}
-                                    >
-                                      {meta.hitIndices.map((paramIdx, i) => {
-                                        const targetLabel = getHitTargetLabel(meta.skill.desc, paramIdx);
-                                        const fallback = i === 0 ? 'main target' : null;
-                                        const shown = targetLabel || fallback;
-                                        return (
-                                          <option key={paramIdx} value={paramIdx}>
-                                            Hit {i + 1}{shown ? ` (${shown})` : ''}
-                                          </option>
-                                        );
-                                      })}
-                                    </select>
-                                  </div>
                                 )}
                               </>
                             )}
