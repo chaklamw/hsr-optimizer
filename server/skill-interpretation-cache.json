@@ -30,5 +30,29 @@
       "damageSourceName": null
     },
     "extractedAt": "2026-08-27T00:56:46.679Z"
+  },
+  "bea261efa3fa9dec48fc7bb4b7f281e0285a749f077090a35179c3482afaa95d": {
+    "result": {
+      "damageType": "STANDARD",
+      "scalingStat": "ATK",
+      "damageSourceName": null
+    },
+    "extractedAt": "2026-08-27T06:24:13.286Z"
+  },
+  "fcab65c1d1da775cf89a339d841bb56ea6cc47381a88ae05489347be6fd0ee26": {
+    "result": {
+      "damageType": "STANDARD",
+      "scalingStat": "ATK",
+      "damageSourceName": null
+    },
+    "extractedAt": "2026-08-27T06:24:15.188Z"
+  },
+  "bd2bb24263169b7b43b650234da113f7ff60c033bc2d06f6f5bbcd2bc36f3fb9": {
+    "result": {
+      "damageType": "STANDARD",
+      "scalingStat": "ATK",
+      "damageSourceName": null
+    },
+    "extractedAt": "2026-08-27T20:30:10.684Z"
   }
 }

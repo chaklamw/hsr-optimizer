@@ -353,18 +353,100 @@ function getHitTargetLabel(desc, paramIndex) {
 const PER_HIT_TARGET_STACKING_PATTERN =
   /multiplier against one designated enemy by ([\d.]+)%(?:[^%]*?multiplier against adjacent targets by ([\d.]+)%)?/i;
 
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Player's actual current level for a given ability, found by scanning
+// skillTreeList for whichever trace node's own level_up_skills list
+// includes this ability's id — that's the StarRailRes-documented mapping
+// from an ability id to the trace node that actually controls its level.
+// There's no reliable numeric relationship between ability ids (e.g.
+// "150101") and trace node pointIds (e.g. "1501001") to exploit instead —
+// confirmed by checking real data, where a single trace node's level can
+// cover multiple ability ids at once (e.g. an ordinary Basic ATK and its
+// enhanced/finale variant sharing one node). skillTrees is needed
+// alongside skillTreeList since level_up_skills lives on the trace node's
+// own metadata (in skillTrees), not on the skillTreeList entry itself.
+// Returns null (not a fallback) when the ability isn't found in any
+// node's level_up_skills — e.g. abilities without their own tracked
+// level — so callers can fall back to max_level themselves.
+function getActualSkillLevel(character, skillId, skillTrees) {
+  for (const point of character?.skillTreeList || []) {
+    const treeInfo = skillTrees[point.pointId];
+    if (treeInfo?.level_up_skills?.some((s) => String(s.id) === String(skillId))) {
+      return point.level;
+    }
+  }
+  return null;
+}
+
+// Same current-level resolution as getActualSkillLevel above, but returns
+// the ability's own desc text formatted at that level instead of the
+// level number itself. Falls back to max_level when the ability isn't
+// tracked in any trace node (e.g. it isn't player-levelable at all).
+// Used anywhere kit text is gathered for damage math or AI extraction
+// input, so a partially-invested ability (like a trace-linked "Skill"
+// entry capped below its own max_level) doesn't get treated as maxed
+// just because that's simpler to assume — generalizes to any character's
+// abilities, not just ones with a known name.
+function getSkillDescAtActualLevel(character, skill, skillTrees) {
+  const level = getActualSkillLevel(character, skill.id, skillTrees) || skill.max_level || skill.params.length;
+  const clampedIndex = Math.min(Math.max(level, 1), skill.params.length) - 1;
+  return formatLightConeDesc(skill.desc, skill.params[clampedIndex]) || skill.desc || '';
+}
+
+// The trigger cap itself (Sparxie: "up to 20 time(s)") isn't stated in the
+// same ability's text as the DMG-multiplier bonus — it's in whichever
+// ability actually triggers the named source ability repeatedly (for
+// Sparxie, that's her Skill, not "Engagement Farming"'s own entry). Scans
+// every ability's text for the source ability's own name in quotes
+// followed by "up to N time(s)" within the same sentence, so this
+// generalizes to any character with the same phrasing pattern instead of
+// assuming a fixed cap.
+function findMaxTriggerCount(abilities, sourceName) {
+  if (!sourceName) return null;
+  const pattern = new RegExp(`${escapeRegExp(sourceName)}[^.]*?up to (\\d+) time`, 'i');
+  for (const a of abilities) {
+    const match = a.desc.match(pattern);
+    if (match) return Number(match[1]);
+  }
+  return null;
+}
+
 function getPerHitTargetStackingBonus(abilities) {
   for (const a of abilities) {
     const match = a.desc.match(PER_HIT_TARGET_STACKING_PATTERN);
     if (match) {
+      const sourceName = a.name;
       return {
-        sourceName: a.name,
+        sourceName,
         mainPerStack: Number(match[1]) / 100,
         adjacentPerStack: match[2] ? Number(match[2]) / 100 : 0,
+        maxTriggers: findMaxTriggerCount(abilities, sourceName),
       };
     }
   }
   return null;
+}
+
+// The AI-extracted conditionals matching perHitStackingBonus's source
+// ability were themselves extracted from max-level kit text (kept stable
+// for the shared extraction cache — see hashConditionalsInput in
+// server.js), so their cached valuesByStack doesn't reflect the player's
+// actual current level the way perHitStackingBonus now does. Rather than
+// show a number that can silently disagree with what's actually being
+// calculated, this re-derives the live percentage from
+// perHitStackingBonus directly, distinguishing "main target" vs
+// "adjacent target" by checking the conditional's own trigger text —
+// reading the AI's own generated description rather than any
+// character-specific check, so it holds for any character with this
+// same main/adjacent split.
+function getLivePerHitStackingPercent(conditional, perHitStackingBonus) {
+  if (!perHitStackingBonus) return null;
+  const isAdjacent = /adjacent/i.test(conditional.trigger || '');
+  const fraction = isAdjacent ? perHitStackingBonus.adjacentPerStack : perHitStackingBonus.mainPerStack;
+  return Math.round(fraction * 10000) / 100;
 }
 
 // An AI-extracted (or manual) conditional restricted to a specific ability
@@ -887,6 +969,7 @@ function computeScenarioTotalDamage(stats, scenario) {
     activeCharacter,
     characterSkills,
     skillIds,
+    skillTrees,
     calcSkillId,
     calcSkillLevel,
     calcActivationIndex,
@@ -942,7 +1025,7 @@ function computeScenarioTotalDamage(stats, scenario) {
     .filter(Boolean)
     .map((s) => ({
       name: s.name,
-      desc: formatLightConeDesc(s.desc, s.params[s.params.length - 1]) || s.desc || '',
+      desc: getSkillDescAtActualLevel(activeCharacter, s, skillTrees),
     }))
     .filter((a) => a.desc);
   const perHitStackingBonus = hasMultipleHitValues ? getPerHitTargetStackingBonus(allAbilities) : null;
@@ -1445,7 +1528,7 @@ export default function ProfilePage() {
   function addRotationRow(skillId) {
     const skill = characterSkills[skillId];
     const id = makeRotationRowId();
-    const level = skill?.max_level || 1;
+    const level = getActualSkillLevel(activeCharacter, skillId, skillTrees) || skill?.max_level || 1;
     const newRow = {
       id,
       skillId,
@@ -1473,7 +1556,7 @@ export default function ProfilePage() {
 
   function handleRotationRowSkillChange(id, skillId) {
     const skill = characterSkills[skillId];
-    const level = skill?.max_level || 1;
+    const level = getActualSkillLevel(activeCharacter, skillId, skillTrees) || skill?.max_level || 1;
     updateRotationRow(id, {
       skillId,
       skillLevel: level,
@@ -1891,6 +1974,7 @@ export default function ProfilePage() {
                     activeCharacter,
                     characterSkills,
                     skillIds: activeInfo?.skills || [],
+                    skillTrees,
                     calcEnemyLevel,
                     calcEnemyRes,
                     calcDefShred,
@@ -2126,7 +2210,7 @@ export default function ProfilePage() {
                   .filter(Boolean)
                   .map((s) => ({
                     name: s.name,
-                    desc: formatLightConeDesc(s.desc, s.params[s.params.length - 1]) || s.desc || '',
+                    desc: getSkillDescAtActualLevel(activeCharacter, s, skillTrees),
                   }))
                   .filter((a) => a.desc);
                 const perHitStackingBonus = getPerHitTargetStackingBonus(allAbilities);
@@ -2231,6 +2315,11 @@ export default function ProfilePage() {
                   // sufficient to know this specific row should show the
                   // input, without re-deriving it from multiHitAbilityNames.
                   const hasPerHitStackingInput = hasMultipleHitValues && !!perHitStackingBonus;
+                  const perHitStackingConditionals = hasPerHitStackingInput
+                    ? allConditionals.filter((c) =>
+                        isDuplicatePerHitTargetConditional(c, multiHitAbilityNames, perHitStackingBonus)
+                      )
+                    : [];
 
                   return {
                     skill,
@@ -2246,6 +2335,7 @@ export default function ProfilePage() {
                     isBreathSibling,
                     hasTurnPositionSelector,
                     hasPerHitStackingInput,
+                    perHitStackingConditionals,
                   };
                 }
 
@@ -2253,6 +2343,7 @@ export default function ProfilePage() {
                   activeCharacter,
                   characterSkills,
                   skillIds,
+                  skillTrees,
                   calcEnemyLevel,
                   calcEnemyRes,
                   calcDefShred,
@@ -2696,6 +2787,7 @@ export default function ProfilePage() {
                               <div className="compare-form-row">
                                 <span className="calc-inline-label">
                                   {meta.isBreathAbility ? 'Cast' : 'Breaths cast this turn'}
+                                  {linkedTraceConditional && <ConditionalHelpTooltip c={linkedTraceConditional} />}
                                 </span>
                                 <select
                                   value={row.activationIndex}
@@ -2715,26 +2807,35 @@ export default function ProfilePage() {
 
                             {meta.hasPerHitStackingInput && (
                               <div className="compare-form-row">
-                                <span className="calc-inline-label">{perHitStackingBonus.sourceName} triggers</span>
+                                <span className="calc-inline-label">
+                                  {perHitStackingBonus.sourceName} triggers
+                                  {meta.perHitStackingConditionals.map((c) => {
+                                    const liveValue = getLivePerHitStackingPercent(c, perHitStackingBonus);
+                                    const displayConditional =
+                                      liveValue != null ? { ...c, valuesByStack: [liveValue] } : c;
+                                    return <ConditionalHelpTooltip key={c.name} c={displayConditional} />;
+                                  })}
+                                </span>
                                 <input
                                   type="number"
                                   min="0"
-                                  max="20"
+                                  max={perHitStackingBonus.maxTriggers ?? undefined}
                                   value={row.stackingTriggers ?? 0}
-                                  onChange={(e) =>
-                                    updateRotationRow(row.id, {
-                                      // Capped at 20 to match Sparxie's kit
-                                      // text ("Engagement Farming" can be
-                                      // triggered "up to 20 time(s)").
-                                      // Currently a fixed UI cap rather than
-                                      // parsed from kit text — worth
-                                      // revisiting generically if another
-                                      // character's equivalent mechanic
-                                      // turns out to cap at a different
-                                      // count.
-                                      stackingTriggers: Math.max(0, Math.min(20, Number(e.target.value) || 0)),
-                                    })
-                                  }
+                                  onChange={(e) => {
+                                    const raw = Math.max(0, Number(e.target.value) || 0);
+                                    // Derived from kit text (findMaxTriggerCount)
+                                    // rather than a fixed number, so this holds
+                                    // up for any future character with the same
+                                    // "X can be triggered repeatedly, up to N
+                                    // time(s)" phrasing, even if N isn't 20.
+                                    // Falls back to unbounded if the cap
+                                    // couldn't be found in kit text at all.
+                                    const clamped =
+                                      perHitStackingBonus.maxTriggers != null
+                                        ? Math.min(perHitStackingBonus.maxTriggers, raw)
+                                        : raw;
+                                    updateRotationRow(row.id, { stackingTriggers: clamped });
+                                  }}
                                 />
                               </div>
                             )}
