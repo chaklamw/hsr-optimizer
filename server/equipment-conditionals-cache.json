@@ -148,5 +148,38 @@
       }
     ],
     "extractedAt": "2026-08-25T19:56:25.619Z"
+  },
+  "35be596b12d129e1f93d22ed602b5f51af82483951959b752b7642bfb59b706f": {
+    "sourceType": "Light Cone Passive",
+    "conditionals": [],
+    "extractedAt": "2026-08-28T06:48:14.343Z"
+  },
+  "dbd6233b0ca03d51a5132dd3ec82661fd175c27a8a7ae739568586cd4729bcf7": {
+    "sourceType": "Relic Set (2pc)",
+    "conditionals": [],
+    "extractedAt": "2026-08-28T06:48:40.854Z"
+  },
+  "06c7821245f47ac86d99fcf319ebe0c8b9d818960033b569f82c4cab97b3a545": {
+    "sourceType": "Relic Set (4pc)",
+    "conditionals": [
+      {
+        "name": "Navigator Isee Sees It",
+        "appliesToAbility": "ALL",
+        "restrictedToAbilityName": null,
+        "sourceAbilityName": "As Navigator Isee Sees It",
+        "statType": "DMG_PERCENT",
+        "trigger": "Gain 1 stack when entering combat or using Skill; lose 1 stack at start of turn or after using Ultimate",
+        "valuesByStack": [
+          18,
+          36,
+          54
+        ],
+        "maxStacks": 3,
+        "overflow": null,
+        "suspicious": false,
+        "suspiciousNote": ""
+      }
+    ],
+    "extractedAt": "2026-08-28T06:49:09.808Z"
   }
 }

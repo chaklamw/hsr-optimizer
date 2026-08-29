@@ -299,12 +299,37 @@ function getDamagePercentParamIndices(desc) {
     // and once as an instanced hit.
     const isInstanceContext = /instance/.test(before) || /instance/.test(after);
     const isEscalatingMultiplierContext = /progressively|respectively/.test(before);
+    // A "DMG increases by X%... can stack up to N times" pattern (e.g.
+    // Archer's Circuit Connection) describes a self-buffing conditional
+    // triggered by repeated casts of this same ability — not a second
+    // simultaneous hit like a Blast's adjacent target — so it's excluded
+    // here the same way instance/heal percentages are, and picked up
+    // instead by isSelfBuffingSkillConditional from the AI extraction.
+    const isSelfStackingBuffContext = /stack/.test(before) || /stack/.test(after);
     const mentionsDmg = /dmg/.test(before);
 
-    if (mentionsDmg && !isHealOrShieldContext && !isInstanceContext && !isEscalatingMultiplierContext)
+    if (
+      mentionsDmg &&
+      !isHealOrShieldContext &&
+      !isInstanceContext &&
+      !isEscalatingMultiplierContext &&
+      !isSelfStackingBuffContext
+    )
       indices.push(idx);
   }
   return [...new Set(indices)];
+}
+
+// Whether an ability's damage explicitly hits every enemy on the field,
+// as opposed to a single target (the vast majority of abilities). Only
+// abilities matching this should scale with Enemies Hit at all — Blast
+// abilities (main + adjacent) are handled separately via
+// hasMultipleHitValues/MAX_BLAST_ADJACENT_ENEMIES, and everything else
+// (a normal single-target hit) should always be a ×1, regardless of how
+// many enemies are on the field. Plain text match, not tied to any
+// specific character's kit.
+function isAoEAllEnemiesAbility(desc) {
+  return /to all enem(y|ies)/i.test(desc || '');
 }
 
 // Skills that fire a fixed number of extra damage instances (e.g.
@@ -457,6 +482,19 @@ function isDuplicatePerHitTargetConditional(conditional, multiHitAbilityNames, p
   // existed — still useful when the model happened to get
   // restrictedToAbilityName right.
   return !!conditional.restrictedToAbilityName && multiHitAbilityNames.has(conditional.restrictedToAbilityName);
+}
+
+// A conditional is "self-buffing" when the same ability both triggers it
+// (sourceAbilityName) and receives its bonus (conditionalAppliesToSkill).
+// Those are naturally tied to that specific ability rather than being a
+// roster-wide toggle, so — like the per-hit-target duplicates above —
+// they're better shown inline on that ability's own row than in the
+// general conditionals list. Generalizes to any character/ability, not
+// just ones with a known name.
+function isSelfBuffingSkillConditional(conditional, skillName, skillTypeText) {
+  if (!conditional?.sourceAbilityName || !skillName) return false;
+  if (conditional.sourceAbilityName !== skillName) return false;
+  return conditionalAppliesToSkill(conditional, skillTypeText, skillName);
 }
 
 const ELEMENT_DMG_TYPE = {
@@ -967,6 +1005,7 @@ function computeScenarioTotalDamage(stats, scenario) {
     calcScalingStat,
     calcNonStatValue,
     calcStackingTriggers,
+    calcSelfBuffCastNumber,
     aiConditionals,
     manualConditionals,
     aiConditionalStacks,
@@ -997,8 +1036,22 @@ function computeScenarioTotalDamage(stats, scenario) {
   // rest of the hit-index/multiplier logic further down) because excluding
   // duplicate per-hit-target conditionals needs to know whether THIS
   // ability has a dedicated stacking bonus before matchedAll is built.
+  //
+  // Some abilities' entire damage output is instance-based (e.g.
+  // Castorice's Netherwing: "6 instance(s) of DMG... to one random
+  // enemy", with no separate non-instanced hit at all) — for those,
+  // getDamagePercentParamIndices correctly finds no legitimate damage
+  // index (it deliberately excludes instance-context percentages), but
+  // falling back to param index 0 would treat whatever unrelated value
+  // lives there as a phantom base hit that then wrongly scales with
+  // Enemies Hit below. Falling back to an empty hitIndices instead makes
+  // that phantom hit contribute 0, leaving instancedHitTotal (added on
+  // separately further down) as the ability's only damage — which is
+  // correct, since "one random enemy" per instance doesn't scale with
+  // battlefield size any more than the Blast pattern above does.
+  const instancedHitInfo = getInstancedHitInfo(resolvedSkillDesc);
   const damagePercentIndices = getDamagePercentParamIndices(skill.desc);
-  const hitIndices = damagePercentIndices.length > 0 ? damagePercentIndices : [0];
+  const hitIndices = damagePercentIndices.length > 0 ? damagePercentIndices : instancedHitInfo ? [] : [0];
   const hasMultipleHitValues = hitIndices.length > 1;
   const allAbilities = (skillIds || [])
     .map((id) => characterSkills[id])
@@ -1040,7 +1093,9 @@ function computeScenarioTotalDamage(stats, scenario) {
   const sumConditionalStat = (statType) =>
     matchedAll.reduce((sum, c) => {
       if (c.statType !== statType) return sum;
-      const stacks = aiConditionalStacks[c.name] || 0;
+      const stacks = isSelfBuffingSkillConditional(c, skill.name, skill.type_text)
+        ? Math.max(0, Math.min(c.maxStacks, (calcSelfBuffCastNumber || 1) - 1))
+        : aiConditionalStacks[c.name] || 0;
       return sum + (c.valuesByStack[stacks - 1] || 0);
     }, 0);
 
@@ -1170,7 +1225,6 @@ function computeScenarioTotalDamage(stats, scenario) {
   const damage = computeHitDamage(selectedActivationMultiplier, getStackingDmgPercent(selectedHitIndex));
   if (damage == null) return null;
 
-  const instancedHitInfo = getInstancedHitInfo(resolvedSkillDesc);
   const instancedHitDamage = instancedHitInfo ? computeHitDamage(instancedHitInfo.perInstancePercent) : null;
   const instancedHitTotal = instancedHitDamage != null ? instancedHitDamage * instancedHitInfo.instanceCount : null;
 
@@ -1183,11 +1237,29 @@ function computeScenarioTotalDamage(stats, scenario) {
   // from the overall battlefield cap (MAX_BATTLEFIELD_ENEMIES) below,
   // which still governs "hits all enemies" abilities.
   const MAX_BLAST_ADJACENT_ENEMIES = 2;
+  const hitsAllEnemies = isAoEAllEnemiesAbility(skill.desc);
   const baseTotalDamage = hasMultipleHitValues
     ? (computeHitDamage(levelParams[hitIndices[0]], getStackingDmgPercent(hitIndices[0])) || 0) +
       (computeHitDamage(levelParams[hitIndices[1]], getStackingDmgPercent(hitIndices[1])) || 0) *
         Math.max(0, Math.min(MAX_BLAST_ADJACENT_ENEMIES, calcEnemyCount - 1))
-    : damage * calcEnemyCount;
+    : damage * (hitsAllEnemies ? calcEnemyCount : 1);
+
+  if (typeof window !== 'undefined' && window.__debugDamageCalc) {
+    console.log('damage calc debug', {
+      skillName: skill?.name,
+      skillDesc: skill?.desc,
+      damagePercentIndices: getDamagePercentParamIndices(skill.desc),
+      hitIndices,
+      hasMultipleHitValues,
+      instancedHitInfo,
+      hitsAllEnemies,
+      damage,
+      instancedHitTotal,
+      calcEnemyCount,
+      baseTotalDamage,
+      total: instancedHitTotal != null ? baseTotalDamage + instancedHitTotal : baseTotalDamage,
+    });
+  }
 
   return instancedHitTotal != null ? baseTotalDamage + instancedHitTotal : baseTotalDamage;
 }
@@ -1217,6 +1289,11 @@ function computeRotationTotalDamage(stats, rows, globalScenario) {
       // ability) should be able to represent different trigger counts, not
       // mirror the same number.
       calcStackingTriggers: row.stackingTriggers ?? 0,
+      // Per-row like calcStackingTriggers above — two rows using the same
+      // self-buffing ability (e.g. Archer's Skill cast twice in one turn)
+      // represent different points in the stacking sequence, not the same
+      // stack count.
+      calcSelfBuffCastNumber: row.selfBuffCastNumber ?? 1,
     };
     const perHit = computeScenarioTotalDamage(stats, rowScenario);
     const rowTotal = perHit != null ? perHit * Math.max(0, row.countPerRotation) : null;
@@ -1534,6 +1611,7 @@ export default function ProfilePage() {
       nonStatValue: 0,
       damageSourceName: null,
       stackingTriggers: 0,
+      selfBuffCastNumber: 1,
     };
     setRotationRows((rows) => [...rows, newRow]);
     detectRowScaling(id, skillId, level);
@@ -1563,6 +1641,7 @@ export default function ProfilePage() {
       // pointed at a different ability, even if the new one happens to
       // have the same kind of stacking mechanic.
       stackingTriggers: 0,
+      selfBuffCastNumber: 1,
     });
     detectRowScaling(id, skillId, level);
   }
@@ -2218,6 +2297,23 @@ export default function ProfilePage() {
                 );
 
                 const allConditionals = [...aiConditionals, ...manualConditionals];
+
+                // Same idea as multiHitAbilityNames above, but for
+                // self-buffing conditionals (an ability whose repeated use
+                // buffs itself, e.g. Archer's Skill stacking) — checked
+                // against every ability in the kit since this list isn't
+                // tied to one selected row.
+                const selfBuffingConditionalNames = new Set(
+                  allConditionals
+                    .filter((c) =>
+                      skillIds.some((id) => {
+                        const s = characterSkills[id];
+                        return s && isSelfBuffingSkillConditional(c, s.name, s.type_text);
+                      })
+                    )
+                    .map((c) => c.name)
+                );
+
                 const overflowConditional = allConditionals.find(
                   (c) => c.statType === 'STAT_OVERFLOW_SPLIT' && c.overflow
                 );
@@ -2277,7 +2373,9 @@ export default function ProfilePage() {
                   const resolvedDesc = skill ? formatLightConeDesc(skill.desc, skill.params[row.skillLevel - 1]) : '';
                   const nonStatScalingLabel = getNonStatScalingLabel(resolvedDesc);
                   const damagePercentIndices = skill ? getDamagePercentParamIndices(skill.desc) : [];
-                  const hitIndices = damagePercentIndices.length > 0 ? damagePercentIndices : [0];
+                  const hasInstancedHit = skill ? !!getInstancedHitInfo(resolvedDesc) : false;
+                  const hitIndices =
+                    damagePercentIndices.length > 0 ? damagePercentIndices : hasInstancedHit ? [] : [0];
                   const hasMultipleHitValues = hitIndices.length > 1;
                   const selectedHitIndex = hitIndices.includes(row.paramIndex) ? row.paramIndex : hitIndices[0];
                   const levelParams = skill ? skill.params[row.skillLevel - 1] || [] : [];
@@ -2305,6 +2403,9 @@ export default function ProfilePage() {
                         isDuplicatePerHitTargetConditional(c, multiHitAbilityNames, perHitStackingBonus)
                       )
                     : [];
+                  const selfBuffingConditionals = skill
+                    ? allConditionals.filter((c) => isSelfBuffingSkillConditional(c, skill.name, skill.type_text))
+                    : [];
 
                   return {
                     skill,
@@ -2318,6 +2419,7 @@ export default function ProfilePage() {
                     hasTurnPositionSelector,
                     hasPerHitStackingInput,
                     perHitStackingConditionals,
+                    selfBuffingConditionals,
                   };
                 }
 
@@ -2475,7 +2577,13 @@ export default function ProfilePage() {
                       )}
 
                       {aiConditionals
-                        .filter((c) => c.statType !== 'STAT_OVERFLOW_SPLIT' && c !== linkedTraceConditional && !isDuplicatePerHitTargetConditional(c, multiHitAbilityNames, perHitStackingBonus))
+                        .filter(
+                          (c) =>
+                            c.statType !== 'STAT_OVERFLOW_SPLIT' &&
+                            c !== linkedTraceConditional &&
+                            !isDuplicatePerHitTargetConditional(c, multiHitAbilityNames, perHitStackingBonus) &&
+                            !selfBuffingConditionalNames.has(c.name)
+                        )
                         .map((c) => (
                           <div key={c.name} className="compare-form-row ai-conditional-row">
                             <div>
@@ -2511,7 +2619,13 @@ export default function ProfilePage() {
                         ))}
 
                       {manualConditionals
-                        .filter((c) => c.statType !== 'STAT_OVERFLOW_SPLIT' && c !== linkedTraceConditional && !isDuplicatePerHitTargetConditional(c, multiHitAbilityNames, perHitStackingBonus))
+                        .filter(
+                          (c) =>
+                            c.statType !== 'STAT_OVERFLOW_SPLIT' &&
+                            c !== linkedTraceConditional &&
+                            !isDuplicatePerHitTargetConditional(c, multiHitAbilityNames, perHitStackingBonus) &&
+                            !selfBuffingConditionalNames.has(c.name)
+                        )
                         .map((c) => (
                           <div key={c.name} className="compare-form-row ai-conditional-row">
                             <div>
@@ -2744,6 +2858,29 @@ export default function ProfilePage() {
                                 Remove
                               </button>
                             </div>
+
+                            {meta.selfBuffingConditionals.length > 0 && (
+                              <div className="compare-form-row ai-conditional-row">
+                                <span className="calc-inline-label">
+                                  {meta.selfBuffingConditionals.map((c) => (
+                                    <span key={c.name}>
+                                      {c.name} <ConditionalHelpTooltip c={c} />
+                                    </span>
+                                  ))}
+                                  — cast # this turn
+                                </span>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  value={row.selfBuffCastNumber ?? 1}
+                                  onChange={(e) =>
+                                    updateRotationRow(row.id, {
+                                      selfBuffCastNumber: Math.max(1, Number(e.target.value) || 1),
+                                    })
+                                  }
+                                />
+                              </div>
+                            )}
 
                             <div className="compare-form-row">
                               <label className="calc-inline-label">

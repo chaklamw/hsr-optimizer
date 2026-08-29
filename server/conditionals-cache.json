@@ -88,5 +88,115 @@
       }
     ],
     "extractedAt": "2026-08-27T00:54:41.504Z"
+  },
+  "f184d4dc4d685ade43d2583841abd0ba2281d630802c68d6dd66fa286f356c3d": {
+    "characterName": "Castorice",
+    "conditionals": [
+      {
+        "name": "Lost Netherland RES Reduction",
+        "appliesToAbility": "ALL",
+        "restrictedToAbilityName": null,
+        "sourceAbilityName": "Doomshriek, Dawn's Chime",
+        "statType": "RES_PEN",
+        "trigger": "always active while Lost Netherland territory is deployed",
+        "valuesByStack": [
+          25
+        ],
+        "maxStacks": 1,
+        "overflow": null,
+        "suspicious": false,
+        "suspiciousNote": ""
+      },
+      {
+        "name": "Allies lose HP DMG boost",
+        "appliesToAbility": "ALL",
+        "restrictedToAbilityName": null,
+        "sourceAbilityName": "Desolation Across Palms",
+        "statType": "DMG_PERCENT",
+        "trigger": "Allies lose HP",
+        "valuesByStack": [
+          25,
+          50,
+          75
+        ],
+        "maxStacks": 3,
+        "overflow": null,
+        "suspicious": false,
+        "suspiciousNote": ""
+      },
+      {
+        "name": "Memosprite Talent",
+        "appliesToAbility": "ALL",
+        "restrictedToAbilityName": null,
+        "sourceAbilityName": "Roar Rumbles the Realm",
+        "statType": "DMG_PERCENT",
+        "trigger": "when Netherwing is summoned",
+        "valuesByStack": [
+          10
+        ],
+        "maxStacks": 1,
+        "overflow": null,
+        "suspicious": false,
+        "suspiciousNote": ""
+      },
+      {
+        "name": "DMG increase per Breath Scorches the Shadow use",
+        "appliesToAbility": "ALL",
+        "restrictedToAbilityName": null,
+        "sourceAbilityName": "Where the West Wind Dwells",
+        "statType": "DMG_PERCENT",
+        "trigger": "Each time Netherwing uses \"Breath Scorches the Shadow\"",
+        "valuesByStack": [
+          30,
+          60,
+          90,
+          120,
+          150,
+          180
+        ],
+        "maxStacks": 6,
+        "overflow": null,
+        "suspicious": false,
+        "suspiciousNote": ""
+      }
+    ],
+    "extractedAt": "2026-08-28T01:44:52.782Z"
+  },
+  "e062cfa9478e83c294d892971e113ccab9881330b1e73a486ec6b7ff70bbe7be": {
+    "characterName": "Archer",
+    "conditionals": [
+      {
+        "name": "Skill Damage Increase in Circuit Connection",
+        "appliesToAbility": "SKILL",
+        "restrictedToAbilityName": null,
+        "sourceAbilityName": "Caladbolg II: Fake Spiral Sword",
+        "statType": "DMG_PERCENT",
+        "trigger": "while in Circuit Connection state, each use of Skill grants a stack increasing Skill damage",
+        "valuesByStack": [
+          120,
+          240
+        ],
+        "maxStacks": 2,
+        "overflow": null,
+        "suspicious": false,
+        "suspiciousNote": ""
+      },
+      {
+        "name": "Guardian",
+        "appliesToAbility": "ALL",
+        "restrictedToAbilityName": null,
+        "sourceAbilityName": "Guardian",
+        "statType": "CRIT_DMG",
+        "trigger": "After allies gain a Skill Point, if total Skill Points are 4 or more",
+        "valuesByStack": [
+          120
+        ],
+        "maxStacks": 1,
+        "overflow": null,
+        "suspicious": false,
+        "suspiciousNote": ""
+      }
+    ],
+    "extractedAt": "2026-08-28T06:47:47.485Z"
   }
 }
