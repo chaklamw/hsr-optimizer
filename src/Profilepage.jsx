@@ -507,26 +507,20 @@ const ELEMENT_DMG_TYPE = {
   Imaginary: 'ImaginaryAddedRatio',
 };
 
-async function interpretSkill(description) {
-  const res = await fetch('http://localhost:3001/api/interpret-skill', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ description }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Server responded ${res.status}`);
-  return { damageType: data.damageType, scalingStat: data.scalingStat, damageSourceName: data.damageSourceName ?? null };
-}
 
-async function extractConditionals(characterName, abilities, forceRefresh = false) {
+async function extractConditionals(characterName, abilities) {
   const res = await fetch('http://localhost:3001/api/extract-conditionals', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ characterName, abilities, forceRefresh }),
+    body: JSON.stringify({ characterName, abilities }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `Server responded ${res.status}`);
-  return { conditionals: data.conditionals, cached: !!data.cached, extractedAt: data.extractedAt };
+  return {
+    conditionals: data.conditionals,
+    kitSupported: !!data.kitSupported,
+    unsupportedEquipment: data.unsupportedEquipment || [],
+  };
 }
 
 // Maps the ability type text StarRailRes uses to the same enum the
@@ -546,7 +540,7 @@ const TYPE_TEXT_TO_ABILITY = {
   'Elation Skill': 'SKILL',
 };
 
-function conditionalAppliesToSkill(conditional, skillTypeText, skillName) {
+function conditionalAppliesToSkill(conditional, skillTypeText, skillName, resolvedAbilityType) {
   // A conditional whose bonus is scoped to one specific named ability
   // variant (e.g. Sparxie's "Bloom! Winner Takes All", an enhanced Basic
   // ATK that shares type_text "Basic ATK" with her ordinary Basic ATK)
@@ -558,7 +552,12 @@ function conditionalAppliesToSkill(conditional, skillTypeText, skillName) {
     return conditional.restrictedToAbilityName === skillName;
   }
   if (conditional.appliesToAbility === 'ALL') return true;
-  return conditional.appliesToAbility === TYPE_TEXT_TO_ABILITY[skillTypeText];
+  // resolvedAbilityType is passed directly for authored rows (their
+  // abilityType comes straight from the character file, e.g. 'BASIC' or
+  // 'ELATION_SKILL') rather than derived from real kit type_text — those
+  // rows don't have a type_text to look up in the first place.
+  const abilityType = resolvedAbilityType || TYPE_TEXT_TO_ABILITY[skillTypeText];
+  return conditional.appliesToAbility === abilityType;
 }
 
 const CONDITIONAL_STAT_TYPES = [
@@ -1010,17 +1009,23 @@ function computeScenarioTotalDamage(stats, scenario) {
     manualConditionals,
     aiConditionalStacks,
     elementDmgType,
+    // Only present for rows built from a hand-authored character file
+    // (server/characters/*.js). Matches Fribbels' own model exactly: the
+    // multiplier is a fixed hand-typed percentage, not derived from
+    // characterSkills/level params, and there's no hit-index/multi-hit/
+    // breath-link resolution — that machinery exists specifically to parse
+    // ambiguous real kit text, which an authored row doesn't have.
+    calcAuthoredMultiplierPercent,
+    calcAuthoredAbilityName,
+    calcAuthoredAbilityType,
+    calcAuthoredAveragedAcrossEnemies,
   } = scenario;
 
-  if (!stats || !calcSkillId) return null;
-  const skill = characterSkills[calcSkillId];
-  if (!skill) return null;
-
-  const levelParams = skill.params[calcSkillLevel - 1] || [];
-  const resolvedSkillDesc = formatLightConeDesc(skill.desc, levelParams);
-  const nonStatScalingLabel = getNonStatScalingLabel(resolvedSkillDesc);
-  const scalingKey = calcScalingStat ? calcScalingStat.toLowerCase() : '';
-  const scalingValue = nonStatScalingLabel ? calcNonStatValue : scalingKey ? stats[scalingKey] : null;
+  if (!stats) return null;
+  const isAuthored = calcAuthoredMultiplierPercent != null;
+  if (!isAuthored && !calcSkillId) return null;
+  const skill = isAuthored ? null : characterSkills[calcSkillId];
+  if (!isAuthored && !skill) return null;
 
   const elementalDmgPercent =
     elementDmgType && stats.genericStats[elementDmgType] ? stats.genericStats[elementDmgType] * 100 : 0;
@@ -1031,6 +1036,129 @@ function computeScenarioTotalDamage(stats, scenario) {
   const elationPercent = stats.genericStats.ElationDamageAddedRatio
     ? stats.genericStats.ElationDamageAddedRatio * 100
     : 0;
+
+  // ---- AUTHORED ROW PATH ----
+  // Self-contained: computes conditional matching, DEF/RES/CRIT/overflow,
+  // and final damage independently of everything below, which is all
+  // real-kit-text parsing machinery (hit indices, multi-hit stacking,
+  // breath-linked groups, escalating multipliers) that doesn't apply here.
+  if (isAuthored) {
+    const matchedAll = [
+      ...aiConditionals.filter((c) =>
+        conditionalAppliesToSkill(c, null, calcAuthoredAbilityName, calcAuthoredAbilityType)
+      ),
+      ...manualConditionals.filter((c) =>
+        conditionalAppliesToSkill(c, null, calcAuthoredAbilityName, calcAuthoredAbilityType)
+      ),
+    ].filter((c) => !c.restrictedToDamageType || c.restrictedToDamageType === calcDamageType);
+
+    const sumConditionalStat = (statType) =>
+      matchedAll.reduce((sum, c) => {
+        if (c.statType !== statType) return sum;
+        const stacks = aiConditionalStacks[c.name] || 0;
+        return sum + (c.valuesByStack[stacks - 1] || 0);
+      }, 0);
+
+    const aiResPenPercent = sumConditionalStat('RES_PEN');
+    const aiDefPenPercent = sumConditionalStat('DEF_PEN');
+    const aiVulnerabilityPercent = sumConditionalStat('VULNERABILITY');
+    const aiCritRateBonus = sumConditionalStat('CRIT_RATE');
+    const aiCritDmgBonus = sumConditionalStat('CRIT_DMG');
+
+    let aiDmgPercent = sumConditionalStat('DMG_PERCENT');
+    let aiAtkPercentBonus = sumConditionalStat('ATK_PERCENT');
+
+    const effectiveEnemyRes = calcEnemyRes - aiResPenPercent;
+    const effectiveDefShred = calcDefShred + aiDefPenPercent;
+    const baseCritRatePercent = parseFloat(stats.critRate) + aiCritRateBonus;
+    const baseCritDmgPercent = parseFloat(stats.critDmg) + aiCritDmgBonus;
+
+    const overflowConditional = matchedAll.find((c) => c.statType === 'STAT_OVERFLOW_SPLIT' && c.overflow);
+    let overflowCritRateBonus = 0;
+    let overflowCritDmgBonus = 0;
+    if (calcUsingOverflowSplit && overflowConditional) {
+      const { overflow } = overflowConditional;
+      const baseValueByStat = {
+        CRIT_RATE: baseCritRatePercent,
+        CRIT_DMG: baseCritDmgPercent,
+        DMG_PERCENT: aiDmgPercent,
+        ATK_PERCENT: aiAtkPercentBonus,
+      };
+      const split = computeStatOverflowSplit(baseValueByStat[overflow.primaryStat] ?? 0, calcPunchlineValue, overflow);
+      const applyBonus = (statKey, bonus) => {
+        if (statKey === 'CRIT_RATE') overflowCritRateBonus += bonus;
+        else if (statKey === 'CRIT_DMG') overflowCritDmgBonus += bonus;
+        else if (statKey === 'DMG_PERCENT') aiDmgPercent += bonus;
+        else if (statKey === 'ATK_PERCENT') aiAtkPercentBonus += bonus;
+      };
+      applyBonus(overflow.primaryStat, split.primaryBonus);
+      applyBonus(overflow.secondaryStat, split.secondaryBonus);
+    }
+
+    const effectiveCritRatePercent = baseCritRatePercent + overflowCritRateBonus;
+    const effectiveCritDmgPercent = baseCritDmgPercent + overflowCritDmgBonus;
+    const scalingKeyAuthored = calcScalingStat ? calcScalingStat.toLowerCase() : '';
+    const rawScalingValue = scalingKeyAuthored ? stats[scalingKeyAuthored] : null;
+    const effectiveScalingValue =
+      scalingKeyAuthored === 'atk' && typeof rawScalingValue === 'number'
+        ? rawScalingValue * (1 + aiAtkPercentBonus / 100)
+        : rawScalingValue;
+
+    const brokenMultiplier = calcEnemyBroken ? 1.0 : 0.9;
+    const multiplierFraction = calcAuthoredMultiplierPercent / 100;
+
+    const hitDamage = isElation
+      ? computeElationDamage({
+          abilityMultiplierPercent: multiplierFraction * 100,
+          characterLevel: activeCharacter.level,
+          enemyLevel: calcEnemyLevel,
+          elationPercent,
+          merrymakePercent: calcMerrymakePercent,
+          punchlineValue: calcPunchlineValue,
+          usingCertifiedBanger: calcUsingCertifiedBanger,
+          critRatePercent: effectiveCritRatePercent,
+          critDmgPercent: effectiveCritDmgPercent,
+          enemyResPercent: effectiveEnemyRes,
+          defReductionPercent: effectiveDefShred,
+          vulnerabilityPercent: aiVulnerabilityPercent,
+          brokenMultiplier,
+        })
+      : effectiveScalingValue != null
+      ? computeDamage({
+          scalingStatValue: effectiveScalingValue,
+          skillMultiplierPercent: multiplierFraction * 100,
+          characterLevel: activeCharacter.level,
+          enemyLevel: calcEnemyLevel,
+          enemyResPercent: effectiveEnemyRes,
+          defShredPercent: effectiveDefShred,
+          elementalDmgPercent: elementalDmgPercent + allDmgPercent + aiDmgPercent,
+          critRatePercent: effectiveCritRatePercent,
+          critDmgPercent: effectiveCritDmgPercent,
+          vulnerabilityPercent: aiVulnerabilityPercent,
+          brokenMultiplier,
+        })
+      : null;
+
+    if (hitDamage == null) return null;
+
+    // Matches Fribbels' own formula shape exactly — e.g. their Silver Wolf
+    // file computes (bounce + finalHit) / context.enemyCount. This DIVIDES
+    // by enemy count (damage split evenly across the field), which is the
+    // opposite operation from this app's existing hitsAllEnemies path
+    // further below (which MULTIPLIES a single-target hit by enemy count
+    // for ordinary AoE abilities). If a rotation total using this looks
+    // too low with multiple enemies selected, this is the line to revisit —
+    // it's a direct port of Fribbels' formula, not independently verified
+    // against how this app's own AoE convention totals damage.
+    return calcAuthoredAveragedAcrossEnemies ? hitDamage / Math.max(1, calcEnemyCount) : hitDamage;
+  }
+  // ---- END AUTHORED ROW PATH ----
+
+  const levelParams = skill.params[calcSkillLevel - 1] || [];
+  const resolvedSkillDesc = formatLightConeDesc(skill.desc, levelParams);
+  const nonStatScalingLabel = getNonStatScalingLabel(resolvedSkillDesc);
+  const scalingKey = calcScalingStat ? calcScalingStat.toLowerCase() : '';
+  const scalingValue = nonStatScalingLabel ? calcNonStatValue : scalingKey ? stats[scalingKey] : null;
 
   // Moved ahead of matchedAll below (rather than staying inline with the
   // rest of the hit-index/multiplier logic further down) because excluding
@@ -1244,23 +1372,6 @@ function computeScenarioTotalDamage(stats, scenario) {
         Math.max(0, Math.min(MAX_BLAST_ADJACENT_ENEMIES, calcEnemyCount - 1))
     : damage * (hitsAllEnemies ? calcEnemyCount : 1);
 
-  if (typeof window !== 'undefined' && window.__debugDamageCalc) {
-    console.log('damage calc debug', {
-      skillName: skill?.name,
-      skillDesc: skill?.desc,
-      damagePercentIndices: getDamagePercentParamIndices(skill.desc),
-      hitIndices,
-      hasMultipleHitValues,
-      instancedHitInfo,
-      hitsAllEnemies,
-      damage,
-      instancedHitTotal,
-      calcEnemyCount,
-      baseTotalDamage,
-      total: instancedHitTotal != null ? baseTotalDamage + instancedHitTotal : baseTotalDamage,
-    });
-  }
-
   return instancedHitTotal != null ? baseTotalDamage + instancedHitTotal : baseTotalDamage;
 }
 
@@ -1294,6 +1405,12 @@ function computeRotationTotalDamage(stats, rows, globalScenario) {
       // represent different points in the stacking sequence, not the same
       // stack count.
       calcSelfBuffCastNumber: row.selfBuffCastNumber ?? 1,
+      // Only present on rows built from a hand-authored rotation — see
+      // the "AUTHORED ROW PATH" branch in computeScenarioTotalDamage.
+      calcAuthoredMultiplierPercent: row.authoredMultiplierPercent ?? null,
+      calcAuthoredAbilityName: row.label,
+      calcAuthoredAbilityType: row.authoredAbilityType ?? null,
+      calcAuthoredAveragedAcrossEnemies: !!row.averagedAcrossEnemies,
     };
     const perHit = computeScenarioTotalDamage(stats, rowScenario);
     const rowTotal = perHit != null ? perHit * Math.max(0, row.countPerRotation) : null;
@@ -1335,6 +1452,13 @@ export default function ProfilePage() {
   const [isDraggingImage, setIsDraggingImage] = useState(false);
   const [showDamageCalc, setShowDamageCalc] = useState(false);
   const [rotationRows, setRotationRows] = useState([]);
+  // Result of checking server/characters/ for this character. null while
+  // unchecked/loading, { found: false } if no hand-authored file exists,
+  // { found: true, abilities, conditionals, rotation, ... } if one does.
+  // Manual rotation building was removed entirely in favor of this — see
+  // the rotation section below, which now reads only from this override
+  // (or shows a "not authored yet" message) instead of an add/remove UI.
+  const [characterKitOverride, setCharacterKitOverride] = useState(null);
   const [calcEnemyLevel, setCalcEnemyLevel] = useState(95);
   const [calcEnemyRes, setCalcEnemyRes] = useState(0);
   const [calcDefShred, setCalcDefShred] = useState(0);
@@ -1355,7 +1479,11 @@ export default function ProfilePage() {
   const [aiConditionalStatus, setAiConditionalStatus] = useState('idle');
   const [aiConditionalError, setAiConditionalError] = useState('');
   const [aiConditionalStacks, setAiConditionalStacks] = useState({});
-  const [aiConditionalCached, setAiConditionalCached] = useState(false);
+  // Everything /api/extract-conditionals returns is hand-authored now (no
+  // Groq fallback) — these track what's covered vs explicitly missing,
+  // rather than "cached vs freshly extracted" which no longer applies.
+  const [kitSupported, setKitSupported] = useState(false);
+  const [unsupportedEquipment, setUnsupportedEquipment] = useState([]);
   // Tracks which character's avatarId the AI conditional detector has
   // already been run for (successfully or not), so opening the calculator
   // can auto-trigger detection once per character instead of leaving it as
@@ -1408,7 +1536,7 @@ export default function ProfilePage() {
     }
   }
 
-  async function handleDetectAiConditionals(forceRefresh = false) {
+  async function handleDetectAiConditionals() {
     const characterName = characterNames[activeCharacter.avatarId]?.name || 'Unknown';
     const skillIds = characterNames[activeCharacter.avatarId]?.skills || [];
     // Marked as soon as detection is kicked off (not just on success) so
@@ -1527,13 +1655,19 @@ export default function ProfilePage() {
     setAiConditionalStatus('loading');
     setAiConditionalError('');
     try {
-      const { conditionals, cached } = await extractConditionals(characterName, abilities, forceRefresh);
+      const { conditionals, kitSupported: kitOk, unsupportedEquipment: unsupportedItems } =
+        await extractConditionals(characterName, abilities);
       setAiConditionals(conditionals);
       setAiConditionalStacks({});
-      setAiConditionalCached(cached);
-      setAiConditionalStatus(conditionals.length === 0 ? 'empty' : 'done');
+      setKitSupported(kitOk);
+      setUnsupportedEquipment(unsupportedItems);
+      if (!kitOk && conditionals.length === 0) {
+        setAiConditionalStatus('unsupported');
+      } else {
+        setAiConditionalStatus(conditionals.length === 0 ? 'empty' : 'done');
+      }
     } catch (err) {
-      console.error('AI conditional detection failed:', err);
+      console.error('Conditional lookup failed:', err);
       setAiConditionalStatus('error');
       setAiConditionalError(err.message || 'Failed to reach the extraction service.');
     }
@@ -1547,109 +1681,13 @@ export default function ProfilePage() {
     setRotationRows((rows) => rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   }
 
-  // Runs the same per-ability classification used by the old single-ability
-  // calculator (damageType/scalingStat, plus damageSourceName for abilities
-  // whose own action doesn't deal the damage — e.g. a Zone-deploy Ultimate
-  // whose actual DMG comes from a separately-named, separately-triggered
-  // effect like "Top Loot Box"). Runs per row rather than once globally,
-  // since a rotation can mix abilities with different damage types.
-  async function detectRowScaling(id, skillId, level) {
-    const skill = characterSkills[skillId];
-    if (!skill) return;
-
-    const resolvedDesc = formatLightConeDesc(skill.desc, skill.params[level - 1]);
-    if (!resolvedDesc) return;
-
-    if (getNonStatScalingLabel(resolvedDesc)) {
-      updateRotationRow(id, { scalingStatus: 'idle' });
-      return;
-    }
-
-    updateRotationRow(id, { scalingStatus: 'loading', scalingError: '' });
-    try {
-      const { damageType, scalingStat, damageSourceName } = await interpretSkill(resolvedDesc);
-      setRotationRows((rows) =>
-        rows.map((r) =>
-          r.id === id
-            ? {
-                ...r,
-                damageType: damageType === 'ELATION' ? DamageType.ELATION : DamageType.STANDARD,
-                scalingStat: scalingStat === 'NONE' ? '' : scalingStat,
-                damageSourceName: damageSourceName || null,
-                // Adopt the detected source name as the row's display label
-                // (e.g. "Ultimate" -> "Top Loot Box") unless the person has
-                // already typed their own label for this row.
-                label: !r.labelIsCustom && damageSourceName ? damageSourceName : r.label,
-                scalingStatus: 'done',
-              }
-            : r
-        )
-      );
-    } catch (err) {
-      console.error('Skill scaling detection failed:', err);
-      updateRotationRow(id, { scalingStatus: 'error', scalingError: err.message || 'Failed to reach the detection service.' });
-    }
-  }
-
-  function addRotationRow(skillId) {
-    const skill = characterSkills[skillId];
-    const id = makeRotationRowId();
-    const level = getActualSkillLevel(activeCharacter, skillId, skillTrees) || skill?.max_level || 1;
-    const newRow = {
-      id,
-      skillId,
-      skillLevel: level,
-      paramIndex: 0,
-      activationIndex: 0,
-      countPerRotation: 1,
-      label: skill?.name || '',
-      labelIsCustom: false,
-      damageType: DamageType.STANDARD,
-      scalingStat: '',
-      scalingStatus: 'idle',
-      scalingError: '',
-      nonStatValue: 0,
-      damageSourceName: null,
-      stackingTriggers: 0,
-      selfBuffCastNumber: 1,
-    };
-    setRotationRows((rows) => [...rows, newRow]);
-    detectRowScaling(id, skillId, level);
-  }
-
-  function removeRotationRow(id) {
-    setRotationRows((rows) => rows.filter((r) => r.id !== id));
-  }
-
-  function handleRotationRowSkillChange(id, skillId) {
-    const skill = characterSkills[skillId];
-    const level = getActualSkillLevel(activeCharacter, skillId, skillTrees) || skill?.max_level || 1;
-    updateRotationRow(id, {
-      skillId,
-      skillLevel: level,
-      paramIndex: 0,
-      activationIndex: 0,
-      label: skill?.name || '',
-      labelIsCustom: false,
-      damageType: DamageType.STANDARD,
-      scalingStat: '',
-      scalingStatus: 'idle',
-      nonStatValue: 0,
-      damageSourceName: null,
-      // Reset rather than carried over — a stale trigger count from
-      // whatever ability this row used to be doesn't make sense once it's
-      // pointed at a different ability, even if the new one happens to
-      // have the same kind of stacking mechanic.
-      stackingTriggers: 0,
-      selfBuffCastNumber: 1,
-    });
-    detectRowScaling(id, skillId, level);
-  }
-
   function handleRotationRowLevelChange(id, level) {
     // Level only changes the skill's numeric param values, never its
     // scaling stat or damage type — no need to re-run detection against
-    // Groq for something level-invariant.
+    // Groq for something level-invariant. Still relevant for authored
+    // rows too (e.g. testing a lower trace/eidolon level), since the
+    // authored multiplier is flat but the level still feeds
+    // characterLevel-dependent parts of the damage formula elsewhere.
     updateRotationRow(id, { skillLevel: level });
   }
 
@@ -1741,6 +1779,17 @@ export default function ProfilePage() {
     }
   }, [data]);
 
+  // Rotation rows and manually-added conditionals are both tied to a
+  // specific character's kit (skillIds, ability names), so — like
+  // aiConditionals/aiConditionalStacks already do via the
+  // aiConditionalCharacterId check below — they need to reset on
+  // character switch rather than carrying over into whichever character
+  // is opened next.
+  useEffect(() => {
+    setRotationRows([]);
+    setManualConditionals([]);
+  }, [selectedId]);
+
   // Auto-run AI conditional detection when the Damage Calculator opens,
   // instead of leaving it as a mandatory extra click every time. The
   // "Detect conditional bonuses" / "Re-detect" buttons still exist for the
@@ -1756,8 +1805,136 @@ export default function ProfilePage() {
     if (currentId == null) return;
     if (aiConditionalCharacterId === currentId) return;
     if (aiConditionalStatus === 'loading') return;
-    handleDetectAiConditionals(false);
+    handleDetectAiConditionals();
   }, [showDamageCalc, selectedId, data]);
+
+  // Replaces the old manual "add ability to rotation" flow entirely. When
+  // the calculator opens for a character, check server/characters/ for a
+  // hand-authored file. If one exists and declares a rotation, build
+  // rotationRows straight from its data (no Groq call — abilities/counts
+  // come directly from the file). If no file exists, or one exists but
+  // hasn't had a rotation authored yet, rotationRows stays empty and the
+  // UI below shows a "not available yet" message instead of a builder.
+  useEffect(() => {
+    if (!showDamageCalc || !data) return;
+    const characters = data.detailInfo?.avatarDetailList || [];
+    const currentId = selectedId ?? characters[0]?.avatarId;
+    if (currentId == null) return;
+    const currentCharacterName = characterNames[currentId]?.name;
+    if (!currentCharacterName) return;
+
+    let cancelled = false;
+    setCharacterKitOverride(null);
+
+    fetch(`http://localhost:3001/api/character-kit?characterName=${encodeURIComponent(currentCharacterName)}`)
+      .then((res) => res.json())
+      .then((result) => {
+        if (cancelled) return;
+        setCharacterKitOverride(result);
+
+        if (!result.found || !result.rotation || result.rotation.length === 0) {
+          setRotationRows([]);
+          return;
+        }
+
+        const activeChar = characters.find((c) => c.avatarId === currentId);
+        const newRows = result.rotation
+          .map((entry) => {
+            // "Top Loot Box" (and similarly-named attached triggers) aren't
+            // their own row in characterSkills — they're a sub-effect of
+            // whatever ability declares them via attachedTriggers, so they
+            // don't need a skillId match at all, just the ability data the
+            // character file already carries directly.
+            if (entry.isAttachedTrigger) {
+              const parentAbilityData = Object.values(result.abilities).find((a) =>
+                a.attachedTriggers?.some((t) => t.name === entry.abilityName)
+              );
+              const triggerData = parentAbilityData?.attachedTriggers?.find(
+                (t) => t.name === entry.abilityName
+              );
+              if (!triggerData) return null;
+              return {
+                id: makeRotationRowId(),
+                skillId: null,
+                skillLevel: null,
+                paramIndex: 0,
+                activationIndex: 0,
+                countPerRotation: entry.countPerRotation,
+                label: entry.abilityName,
+                labelIsCustom: false,
+                damageType: triggerData.damageType === 'ELATION' ? DamageType.ELATION : DamageType.STANDARD,
+                scalingStat: '',
+                scalingStatus: 'done',
+                scalingError: '',
+                nonStatValue: 0,
+                damageSourceName: null,
+                dealsNoDirectDamage: false,
+                stackingTriggers: 0,
+                selfBuffCastNumber: 1,
+                authoredMultiplierPercent: triggerData.baseMultiplierPercent,
+                // Typed as ULT for conditional-matching purposes, matching
+                // how Fribbels itself categorizes this trigger (their
+                // WHOLE_UNIQUE combo entry IS this same Top Loot Box hit —
+                // there's no separate ability type for it in their model
+                // either, see the earlier conversation on this).
+                authoredAbilityType: 'ULT',
+                averagedAcrossEnemies: !!triggerData.averagedAcrossEnemies,
+                locked: true,
+              };
+            }
+
+            const abilityData = result.abilities[entry.abilityName];
+            const skillId = Object.keys(characterSkills).find(
+              (id) => {
+                const s = characterSkills[id];
+                if (!s) return false;
+                const displayName = s.type_text ? `${s.type_text}: ${s.name}` : s.name;
+                return displayName === entry.abilityName;
+              }
+            );
+            const level =
+              (skillId && getActualSkillLevel(activeChar, skillId, skillTrees)) ||
+              characterSkills[skillId]?.max_level ||
+              1;
+
+            return {
+              id: makeRotationRowId(),
+              skillId: skillId || null,
+              skillLevel: level,
+              paramIndex: 0,
+              activationIndex: 0,
+              countPerRotation: entry.countPerRotation,
+              label: entry.abilityName,
+              labelIsCustom: false,
+              damageType: abilityData?.damageType === 'ELATION' ? DamageType.ELATION : DamageType.STANDARD,
+              scalingStat: abilityData?.scalingStat === 'NONE' ? '' : abilityData?.scalingStat || '',
+              scalingStatus: 'done',
+              scalingError: '',
+              nonStatValue: 0,
+              damageSourceName: abilityData?.damageSourceName || null,
+              dealsNoDirectDamage: !!abilityData?.dealsNoDirectDamage,
+              stackingTriggers: 0,
+              selfBuffCastNumber: 1,
+              authoredMultiplierPercent: abilityData?.baseMultiplierPercent,
+              authoredAbilityType: abilityData?.abilityType || null,
+              averagedAcrossEnemies: !!abilityData?.averagedAcrossEnemies,
+              locked: true,
+              missingSkillMatch: !skillId,
+            };
+          })
+          .filter(Boolean);
+
+        setRotationRows(newRows);
+      })
+      .catch((err) => {
+        console.error('Failed to fetch character kit override:', err);
+        if (!cancelled) setCharacterKitOverride({ found: false });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showDamageCalc, selectedId, data, characterSkills, skillTrees]);
 
   if (loading) {
     const percent = Math.round((loadedCount / TOTAL_REQUESTS) * 100);
@@ -2463,43 +2640,51 @@ export default function ProfilePage() {
 
                       <div className="compare-form-row">
                         {aiConditionalStatus === 'loading' && (
-                          <p className="compare-ocr-note">Detecting conditional bonuses...</p>
+                          <p className="compare-ocr-note">Loading conditional bonuses...</p>
                         )}
                         {aiConditionalStatus === 'idle' && (
                           <button
                             type="button"
                             className="compare-weights-toggle"
-                            onClick={() => handleDetectAiConditionals(false)}
+                            onClick={() => handleDetectAiConditionals()}
                           >
-                            Detect conditional bonuses (AI)
+                            Load conditional bonuses
                           </button>
                         )}
                         {aiConditionalStatus === 'error' && (
                           <button
                             type="button"
                             className="compare-weights-toggle"
-                            onClick={() => handleDetectAiConditionals(false)}
+                            onClick={() => handleDetectAiConditionals()}
                           >
-                            Retry detection
+                            Retry
                           </button>
                         )}
-                        {(aiConditionalStatus === 'done' || aiConditionalStatus === 'empty') && (
+                        {(aiConditionalStatus === 'done' ||
+                          aiConditionalStatus === 'empty' ||
+                          aiConditionalStatus === 'unsupported') && (
                           <button
                             type="button"
                             className="compare-weights-toggle"
-                            onClick={() => handleDetectAiConditionals(true)}
-                            title="Bypass the cache and re-run extraction — use this if a character was recently reworked"
+                            onClick={() => handleDetectAiConditionals()}
+                            title="Reload — useful if you just added or edited a character/equipment file"
                           >
-                            Re-detect (skip cache)
+                            Reload
                           </button>
                         )}
                       </div>
 
-                      {aiConditionalStatus === 'done' && (
-                        <p className="compare-ocr-note ai-disclaimer">
-                          ⚠️ These bonuses were extracted by AI from ability text and haven't been manually
-                          verified. Double-check against current in-game tooltips before trusting the numbers.
-                          {aiConditionalCached && ' (Loaded from a previous extraction — click "Re-detect" if this kit was recently reworked.)'}
+                      {!kitSupported && (aiConditionalStatus === 'done' || aiConditionalStatus === 'unsupported') && (
+                        <p className="compare-ocr-note compare-ocr-note-warn">
+                          ⚠️ {activeInfo?.name || 'This character'}'s own kit hasn't been hand-authored yet (no
+                          server/characters/ file) — only equipment bonuses below are covered, if any.
+                        </p>
+                      )}
+
+                      {unsupportedEquipment.length > 0 && (
+                        <p className="compare-ocr-note compare-ocr-note-warn">
+                          ⚠️ Not yet hand-authored, so not included below:{' '}
+                          {unsupportedEquipment.map((eq) => `${eq.name} (${eq.type})`).join(', ')}
                         </p>
                       )}
 
@@ -2507,7 +2692,13 @@ export default function ProfilePage() {
                         <p className="compare-ocr-note compare-ocr-note-warn">{aiConditionalError}</p>
                       )}
                       {aiConditionalStatus === 'empty' && (
-                        <p className="compare-ocr-note">No conditional bonuses detected in this character's ability text.</p>
+                        <p className="compare-ocr-note">No conditional bonuses found for this character's current kit/equipment.</p>
+                      )}
+                      {aiConditionalStatus === 'unsupported' && (
+                        <p className="compare-ocr-note compare-ocr-note-warn">
+                          Nothing here is hand-authored yet for {activeInfo?.name || 'this character'} — no
+                          conditional bonuses to show.
+                        </p>
                       )}
 
                       {hasElationRow && (
@@ -2552,7 +2743,7 @@ export default function ProfilePage() {
                                 {overflowConditional.overflow.secondaryRatePerPoint}%{' '}
                                 {STAT_TYPE_SHORT_LABELS[overflowConditional.overflow.secondaryStat] || overflowConditional.overflow.secondaryStat}{' '}
                                 per remaining point
-                                {overflowConditional.suspicious && ' — ⚠️ AI-extracted values look off, verify manually'}
+                                {overflowConditional.suspicious && ' — ⚠️ Flagged by the author, see note below'}
                               </label>
                             </div>
                           )}
@@ -2591,12 +2782,10 @@ export default function ProfilePage() {
                                 {c.name} <ConditionalHelpTooltip c={c} />{' '}
                                 <span className="conditional-stat-type-tag">{c.statType}</span>
                               </span>
-                              <p className="compare-ocr-note ai-disclaimer">
-                                ⚠️ AI-extracted — {c.trigger} — verify against current patch
-                              </p>
+                              <p className="compare-ocr-note">{c.trigger}</p>
                               {c.suspicious && (
                                 <p className="compare-ocr-note compare-ocr-note-warn">
-                                  ⚠️ Sanitizer flagged as suspicious: {c.suspiciousNote}
+                                  ⚠️ {c.suspiciousNote}
                                 </p>
                               )}
                             </div>
@@ -2800,34 +2989,29 @@ export default function ProfilePage() {
 
                       <div className="compare-form-row">
                         <span className="calc-inline-label">Rotation</span>
-                        <select
-                          value=""
-                          onChange={(e) => {
-                            if (e.target.value) addRotationRow(e.target.value);
-                          }}
-                        >
-                          <option value="">+ Add ability to rotation...</option>
-                          {dedupedSelectableIds.map((id) => {
-                            const s = characterSkills[id];
-                            return (
-                              <option key={id} value={id}>
-                                {s.type_text ? `${s.type_text}: ` : ''}
-                                {s.name}
-                              </option>
-                            );
-                          })}
-                        </select>
                       </div>
 
-                      {rotationRows.length === 0 && (
-                        <p className="compare-ocr-note">
-                          Add abilities above to build a rotation. Total damage is the sum of every row, each
-                          counted the number of times it actually happens in one rotation — not necessarily
-                          once per cast (e.g. a proc effect gated behind an ally's action, like Silver Wolf
-                          LV.999's "Top Loot Box", should have its own row with your expected trigger count,
-                          separate from her Ultimate).
+                      {characterKitOverride == null && (
+                        <p className="compare-ocr-note">Checking for a hand-authored kit for this character...</p>
+                      )}
+
+                      {characterKitOverride?.found === false && (
+                        <p className="compare-ocr-note compare-ocr-note-warn">
+                          No rotation defined for this character yet — {activeInfo?.name || 'this character'}'s
+                          kit hasn't been
+                          hand-authored (see server/characters/). Manual rotation building was removed in favor
+                          of authored rotations; this character needs a file before a total can be shown.
                         </p>
                       )}
+
+                      {characterKitOverride?.found === true &&
+                        (!characterKitOverride.rotation || characterKitOverride.rotation.length === 0) && (
+                          <p className="compare-ocr-note compare-ocr-note-warn">
+                            {activeInfo?.name || 'This character'}'s kit is hand-authored, but no rotation
+                            sequence has been defined yet
+                            for them — add a `rotation` export to their character file.
+                          </p>
+                        )}
 
                       {rotationRows.map((row) => {
                         const meta = getRowMeta(row);
@@ -2836,27 +3020,15 @@ export default function ProfilePage() {
                         return (
                           <div key={row.id} className="rotation-row">
                             <div className="compare-form-row">
-                              <select
-                                value={row.skillId}
-                                onChange={(e) => handleRotationRowSkillChange(row.id, e.target.value)}
-                              >
-                                {dedupedSelectableIds.map((id) => {
-                                  const s = characterSkills[id];
-                                  return (
-                                    <option key={id} value={id}>
-                                      {s.type_text ? `${s.type_text}: ` : ''}
-                                      {s.name}
-                                    </option>
-                                  );
-                                })}
-                              </select>
-                              <button
-                                type="button"
-                                className="compare-remove-btn"
-                                onClick={() => removeRotationRow(row.id)}
-                              >
-                                Remove
-                              </button>
+                              <span className="calc-inline-label rotation-row-locked-label">
+                                {row.label}
+                              </span>
+                              {row.missingSkillMatch && (
+                                <span className="compare-ocr-note compare-ocr-note-warn">
+                                  ⚠️ No matching entry found in this character's skill data — check the ability
+                                  name in server/characters/ matches exactly.
+                                </span>
+                              )}
                             </div>
 
                             {meta.selfBuffingConditionals.length > 0 && (
@@ -2985,6 +3157,13 @@ export default function ProfilePage() {
                                     belongs to a separately-triggered effect, "{row.damageSourceName}". Set
                                     ×/rotation to how many times you expect it to actually trigger, not how many
                                     times you cast this ability.
+                                  </p>
+                                )}
+
+                                {row.dealsNoDirectDamage && (
+                                  <p className="compare-ocr-note compare-ocr-note-warn">
+                                    ⚠️ This ability deals no direct damage of its own — it only sets up a state or
+                                    effect. Add the ability it triggers as a separate rotation row instead.
                                   </p>
                                 )}
 
