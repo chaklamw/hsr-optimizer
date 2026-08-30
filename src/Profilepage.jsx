@@ -1019,6 +1019,15 @@ function computeScenarioTotalDamage(stats, scenario) {
     calcAuthoredAbilityName,
     calcAuthoredAbilityType,
     calcAuthoredAveragedAcrossEnemies,
+    // Opposite operation from AveragedAcrossEnemies above — true AoE that
+    // deals its full multiplier to EVERY enemy (e.g. "Deals 125% Elation
+    // DMG to all enemies," no "split evenly" language), so total damage
+    // scales UP with enemy count rather than being divided down.
+    calcAuthoredHitsAllEnemies,
+    // Blast pattern — main target takes calcAuthoredMultiplierPercent,
+    // up to 2 adjacent targets each take this reduced percent instead
+    // (null/undefined for a non-Blast ability, which skips this entirely).
+    calcAuthoredBlastAdjacentMultiplierPercent,
   } = scenario;
 
   if (!stats) return null;
@@ -1105,11 +1114,15 @@ function computeScenarioTotalDamage(stats, scenario) {
         : rawScalingValue;
 
     const brokenMultiplier = calcEnemyBroken ? 1.0 : 0.9;
-    const multiplierFraction = calcAuthoredMultiplierPercent / 100;
 
-    const hitDamage = isElation
-      ? computeElationDamage({
-          abilityMultiplierPercent: multiplierFraction * 100,
+    // Shared by the main hit and (if this is a Blast-pattern ability) the
+    // adjacent-target hits below — everything except the multiplier itself
+    // is identical between them, so this avoids duplicating the whole
+    // computeDamage/computeElationDamage call shape twice.
+    function computeAuthoredHit(multiplierPercent) {
+      if (isElation) {
+        return computeElationDamage({
+          abilityMultiplierPercent: multiplierPercent,
           characterLevel: activeCharacter.level,
           enemyLevel: calcEnemyLevel,
           elationPercent,
@@ -1122,35 +1135,54 @@ function computeScenarioTotalDamage(stats, scenario) {
           defReductionPercent: effectiveDefShred,
           vulnerabilityPercent: aiVulnerabilityPercent,
           brokenMultiplier,
-        })
-      : effectiveScalingValue != null
-      ? computeDamage({
-          scalingStatValue: effectiveScalingValue,
-          skillMultiplierPercent: multiplierFraction * 100,
-          characterLevel: activeCharacter.level,
-          enemyLevel: calcEnemyLevel,
-          enemyResPercent: effectiveEnemyRes,
-          defShredPercent: effectiveDefShred,
-          elementalDmgPercent: elementalDmgPercent + allDmgPercent + aiDmgPercent,
-          critRatePercent: effectiveCritRatePercent,
-          critDmgPercent: effectiveCritDmgPercent,
-          vulnerabilityPercent: aiVulnerabilityPercent,
-          brokenMultiplier,
-        })
-      : null;
+        });
+      }
+      if (effectiveScalingValue == null) return null;
+      return computeDamage({
+        scalingStatValue: effectiveScalingValue,
+        skillMultiplierPercent: multiplierPercent,
+        characterLevel: activeCharacter.level,
+        enemyLevel: calcEnemyLevel,
+        enemyResPercent: effectiveEnemyRes,
+        defShredPercent: effectiveDefShred,
+        elementalDmgPercent: elementalDmgPercent + allDmgPercent + aiDmgPercent,
+        critRatePercent: effectiveCritRatePercent,
+        critDmgPercent: effectiveCritDmgPercent,
+        vulnerabilityPercent: aiVulnerabilityPercent,
+        brokenMultiplier,
+      });
+    }
 
+    const hitDamage = computeAuthoredHit(calcAuthoredMultiplierPercent);
     if (hitDamage == null) return null;
 
-    // Matches Fribbels' own formula shape exactly — e.g. their Silver Wolf
-    // file computes (bounce + finalHit) / context.enemyCount. This DIVIDES
-    // by enemy count (damage split evenly across the field), which is the
-    // opposite operation from this app's existing hitsAllEnemies path
-    // further below (which MULTIPLIES a single-target hit by enemy count
-    // for ordinary AoE abilities). If a rotation total using this looks
-    // too low with multiple enemies selected, this is the line to revisit —
-    // it's a direct port of Fribbels' formula, not independently verified
-    // against how this app's own AoE convention totals damage.
-    return calcAuthoredAveragedAcrossEnemies ? hitDamage / Math.max(1, calcEnemyCount) : hitDamage;
+    // Blast: main target takes the full hit above, and up to 2 adjacent
+    // targets each take a separately-declared reduced hit — a real,
+    // confirmed HSR mechanic (Blast always hits exactly 3 targets when
+    // enough enemies are present: 1 main + 2 adjacent), not a guess. The
+    // adjacent count is capped by how many OTHER enemies actually exist,
+    // so a single-target scenario correctly gets zero adjacent damage.
+    let totalDamage = hitDamage;
+    if (calcAuthoredBlastAdjacentMultiplierPercent != null) {
+      const adjacentTargetCount = Math.max(0, Math.min(2, calcEnemyCount - 1));
+      if (adjacentTargetCount > 0) {
+        const adjacentHit = computeAuthoredHit(calcAuthoredBlastAdjacentMultiplierPercent);
+        if (adjacentHit != null) totalDamage += adjacentHit * adjacentTargetCount;
+      }
+    }
+
+    // averagedAcrossEnemies (Fribbels' formula shape, e.g. Silver Wolf's
+    // Bonus Stage) DIVIDES by enemy count; hitsAllEnemies (ordinary true
+    // AoE, e.g. "deals X% DMG to all enemies" with no "split evenly"
+    // language) MULTIPLIES — same semantics as the non-authored path's own
+    // hitsAllEnemies handling further below (damage * calcEnemyCount). The
+    // three flags (Blast/averaged/hitsAll) are mutually exclusive in
+    // practice; if more than one were somehow set, Blast's adjacent-target
+    // total is computed first, then divided or multiplied same as a plain
+    // hit would be.
+    if (calcAuthoredAveragedAcrossEnemies) return totalDamage / Math.max(1, calcEnemyCount);
+    if (calcAuthoredHitsAllEnemies) return totalDamage * calcEnemyCount;
+    return totalDamage;
   }
   // ---- END AUTHORED ROW PATH ----
 
@@ -1411,6 +1443,8 @@ function computeRotationTotalDamage(stats, rows, globalScenario) {
       calcAuthoredAbilityName: row.label,
       calcAuthoredAbilityType: row.authoredAbilityType ?? null,
       calcAuthoredAveragedAcrossEnemies: !!row.averagedAcrossEnemies,
+      calcAuthoredHitsAllEnemies: !!row.hitsAllEnemies,
+      calcAuthoredBlastAdjacentMultiplierPercent: row.blastAdjacentMultiplierPercent ?? null,
     };
     const perHit = computeScenarioTotalDamage(stats, rowScenario);
     const rowTotal = perHit != null ? perHit * Math.max(0, row.countPerRotation) : null;
@@ -1879,6 +1913,8 @@ export default function ProfilePage() {
                 // either, see the earlier conversation on this).
                 authoredAbilityType: 'ULT',
                 averagedAcrossEnemies: !!triggerData.averagedAcrossEnemies,
+                hitsAllEnemies: !!triggerData.hitsAllEnemies,
+                blastAdjacentMultiplierPercent: triggerData.blastAdjacentMultiplierPercent ?? null,
                 locked: true,
               };
             }
@@ -1918,6 +1954,8 @@ export default function ProfilePage() {
               authoredMultiplierPercent: abilityData?.baseMultiplierPercent,
               authoredAbilityType: abilityData?.abilityType || null,
               averagedAcrossEnemies: !!abilityData?.averagedAcrossEnemies,
+              hitsAllEnemies: !!abilityData?.hitsAllEnemies,
+              blastAdjacentMultiplierPercent: abilityData?.blastAdjacentMultiplierPercent ?? null,
               locked: true,
               missingSkillMatch: !skillId,
             };
