@@ -1106,6 +1106,25 @@ function computeScenarioTotalDamage(stats, scenario) {
 
     const effectiveCritRatePercent = baseCritRatePercent + overflowCritRateBonus;
     const effectiveCritDmgPercent = baseCritDmgPercent + overflowCritDmgBonus;
+
+    // Self-referential Elation bonus — "increases Elation by X% of the
+    // character's OWN current Elation" (e.g. Yaoguang's Zone). This is
+    // multiplicative on her own base Elation, not a flat percentage-point
+    // add like DMG_PERCENT/CRIT_RATE/etc, so it gets the same kind of
+    // dedicated handling STAT_OVERFLOW_SPLIT gets above for its own
+    // non-standard shape, rather than being forced through the ordinary
+    // additive sumConditionalStat path. A character being buffed by their
+    // OWN "all allies" effect isn't a cross-character-buff problem — they
+    // count as one of their own allies — so this fits the existing
+    // single-character model cleanly.
+    const elationSelfScaledConditional = matchedAll.find((c) => c.statType === 'ELATION_PERCENT_OF_SELF');
+    let effectiveElationPercent = elationPercent;
+    if (elationSelfScaledConditional) {
+      const stacks = aiConditionalStacks[elationSelfScaledConditional.name] || 0;
+      const selfScaleRate = elationSelfScaledConditional.valuesByStack[stacks - 1] || 0;
+      effectiveElationPercent = elationPercent * (1 + selfScaleRate / 100);
+    }
+
     const scalingKeyAuthored = calcScalingStat ? calcScalingStat.toLowerCase() : '';
     const rawScalingValue = scalingKeyAuthored ? stats[scalingKeyAuthored] : null;
     const effectiveScalingValue =
@@ -1125,7 +1144,7 @@ function computeScenarioTotalDamage(stats, scenario) {
           abilityMultiplierPercent: multiplierPercent,
           characterLevel: activeCharacter.level,
           enemyLevel: calcEnemyLevel,
-          elationPercent,
+          elationPercent: effectiveElationPercent,
           merrymakePercent: calcMerrymakePercent,
           punchlineValue: calcPunchlineValue,
           usingCertifiedBanger: calcUsingCertifiedBanger,
@@ -2516,13 +2535,19 @@ export default function ProfilePage() {
                 // Same idea as multiHitAbilityNames above, but for
                 // self-buffing conditionals (an ability whose repeated use
                 // buffs itself, e.g. Archer's Skill stacking) — checked
-                // against every ability in the kit since this list isn't
-                // tied to one selected row.
+                // against rows actually present in the current rotation,
+                // NOT every ability in the character's full kit. A
+                // conditional whose sourceAbilityName matches a real kit
+                // ability that was deliberately left out of an authored
+                // rotation (e.g. Yaoguang's Skill, or Silver Wolf's Talent)
+                // must NOT be excluded here — it has nowhere to display
+                // inline in that case, and would otherwise vanish from the
+                // UI entirely instead of falling back to the general list.
                 const selfBuffingConditionalNames = new Set(
                   allConditionals
                     .filter((c) =>
-                      skillIds.some((id) => {
-                        const s = characterSkills[id];
+                      rotationRows.some((r) => {
+                        const s = characterSkills[r.skillId];
                         return s && isSelfBuffingSkillConditional(c, s.name, s.type_text);
                       })
                     )

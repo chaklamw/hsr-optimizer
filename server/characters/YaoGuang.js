@@ -77,6 +77,28 @@ const conditionals = [
     suspicious: false,
     suspiciousNote: '',
   },
+  // Real text (Skill, "Decalight Unveils All" — not itself modeled as a
+  // damage row, only used as the source here): "While the Zone is active,
+  // increases all allies' Elation by an amount equal to 25.0% of Yao
+  // Guang's Elation." She's a member of her own ally list, so this DOES
+  // apply to her own Elation Skill damage — this isn't the
+  // different-character problem that got the rest of her kit excluded,
+  // it's a self-referential Elation bonus (scales off her OWN current
+  // Elation, not a flat point add), handled via the new
+  // ELATION_PERCENT_OF_SELF statType in computeScenarioTotalDamage.
+  {
+    name: 'Zone Elation Boost',
+    appliesToAbility: 'ALL',
+    restrictedToAbilityName: null,
+    sourceAbilityName: 'Decalight Unveils All',
+    statType: 'ELATION_PERCENT_OF_SELF',
+    trigger: "While her own Zone is active (from Skill), increases her Elation by 25% of her current Elation",
+    valuesByStack: [25],
+    maxStacks: 1,
+    overflow: null,
+    suspicious: false,
+    suspiciousNote: '',
+  },
 ];
 
 // Best-effort authored rotation — FLAGGED FOR REVIEW like every other
