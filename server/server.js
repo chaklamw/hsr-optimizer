@@ -366,7 +366,10 @@ app.post('/api/extract-conditionals', async (req, res) => {
 
   console.log(
     `Received ${abilities.length} ability/abilities for ${characterName}:`,
-    abilities.map((a) => `[${a.type}] ${a.description.slice(0, 400)}${a.description.length > 400 ? '...' : ''}`)
+    abilities.map(
+      (a) =>
+        `[${a.type}] "${a.name || '(no name)'}": ${a.description.slice(0, 400)}${a.description.length > 400 ? '...' : ''}`
+    )
   );
 
   const equipmentAbilities = abilities.filter((a) => isShareableEquipment(a.type));

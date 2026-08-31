@@ -1916,7 +1916,7 @@ export default function ProfilePage() {
                 label: entry.abilityName,
                 labelIsCustom: false,
                 damageType: triggerData.damageType === 'ELATION' ? DamageType.ELATION : DamageType.STANDARD,
-                scalingStat: '',
+                scalingStat: triggerData.scalingStat === 'NONE' ? '' : triggerData.scalingStat || '',
                 scalingStatus: 'done',
                 scalingError: '',
                 nonStatValue: 0,
@@ -1925,12 +1925,16 @@ export default function ProfilePage() {
                 stackingTriggers: 0,
                 selfBuffCastNumber: 1,
                 authoredMultiplierPercent: triggerData.baseMultiplierPercent,
-                // Typed as ULT for conditional-matching purposes, matching
-                // how Fribbels itself categorizes this trigger (their
-                // WHOLE_UNIQUE combo entry IS this same Top Loot Box hit —
-                // there's no separate ability type for it in their model
-                // either, see the earlier conversation on this).
-                authoredAbilityType: 'ULT',
+                // Defaults to ULT only for backward compatibility with
+                // existing attached triggers that don't declare their own
+                // abilityType (e.g. Silver Wolf's Top Loot Box, which
+                // genuinely IS ULT-categorized — see comment there). A
+                // trigger belonging to a Skill-based ability (e.g.
+                // Castorice's Netherwing joint-attack hit) should declare
+                // its own abilityType explicitly rather than silently
+                // inheriting a default that was only ever correct by
+                // coincidence for one specific earlier character.
+                authoredAbilityType: triggerData.abilityType || 'ULT',
                 averagedAcrossEnemies: !!triggerData.averagedAcrossEnemies,
                 hitsAllEnemies: !!triggerData.hitsAllEnemies,
                 blastAdjacentMultiplierPercent: triggerData.blastAdjacentMultiplierPercent ?? null,
@@ -1939,12 +1943,24 @@ export default function ProfilePage() {
             }
 
             const abilityData = result.abilities[entry.abilityName];
+            // Normally the dictionary key IS the real "type_text: name"
+            // display string to match against. But some abilities need
+            // multiple distinctly-keyed authored entries that all
+            // correspond to the SAME real skill — e.g. an ability whose
+            // own multiplier escalates across repeated casts (Castorice's
+            // Breath Scorches the Shadow), authored as 3 separate tiers
+            // with 3 separate labels/multipliers/rotation counts, but all
+            // matching one real characterSkills entry. skillMatchName lets
+            // an ability declare that real name explicitly instead of
+            // requiring its own dictionary key to double as the match
+            // string.
+            const matchName = abilityData?.skillMatchName || entry.abilityName;
             const skillId = Object.keys(characterSkills).find(
               (id) => {
                 const s = characterSkills[id];
                 if (!s) return false;
                 const displayName = s.type_text ? `${s.type_text}: ${s.name}` : s.name;
-                return displayName === entry.abilityName;
+                return displayName === matchName;
               }
             );
             const level =
