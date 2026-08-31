@@ -557,6 +557,14 @@ function conditionalAppliesToSkill(conditional, skillTypeText, skillName, resolv
   // 'ELATION_SKILL') rather than derived from real kit type_text — those
   // rows don't have a type_text to look up in the first place.
   const abilityType = resolvedAbilityType || TYPE_TEXT_TO_ABILITY[skillTypeText];
+  // appliesToAbility is usually a single ability-type string, but some real
+  // kits/equipment genuinely buff more than one ability type at once (e.g.
+  // a light cone passive boosting both Skill and Ultimate DMG) — for those,
+  // authored entries can pass an array instead of picking one and silently
+  // dropping the other.
+  if (Array.isArray(conditional.appliesToAbility)) {
+    return conditional.appliesToAbility.includes(abilityType);
+  }
   return conditional.appliesToAbility === abilityType;
 }
 
@@ -664,6 +672,8 @@ function ConditionalHelpTooltip({ c }) {
                 ? `"${c.restrictedToAbilityName}" only`
                 : c.appliesToAbility === 'ALL'
                 ? "all of this character's abilities"
+                : Array.isArray(c.appliesToAbility)
+                ? c.appliesToAbility.join(' and ')
                 : c.appliesToAbility}
             </p>
             {c.valuesByStack.length > 1 ? (
@@ -2645,7 +2655,17 @@ export default function ProfilePage() {
                   const isBreathAbility = !!breathLinkedGroup && activationVariantIds[0] === breathLinkedGroup.skillId;
                   const isBreathSibling =
                     !!breathLinkedGroup && !isBreathAbility && skill?.type_text === breathLinkedGroup.typeText;
-                  const hasTurnPositionSelector = isBreathAbility || isBreathSibling;
+                  // Authored rows (row.locked) already have their exact
+                  // escalation tier baked into a fixed baseMultiplierPercent
+                  // by hand — e.g. Castorice's Breath Scorches the Shadow
+                  // is authored as 3 separate rows, one per tier, instead
+                  // of one row where the person picks "which cast" via
+                  // this selector. Showing the selector on top of an
+                  // already-fixed authored multiplier would be redundant
+                  // and, worse, misleading (changing it wouldn't do
+                  // anything, since authored damage never reads
+                  // activationIndex at all).
+                  const hasTurnPositionSelector = !row.locked && (isBreathAbility || isBreathSibling);
 
                   // hasMultipleHitValues (above) already confirms THIS row's
                   // own skill is the multi-hit-target ability — combined
