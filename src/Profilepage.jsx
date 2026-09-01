@@ -588,6 +588,8 @@ const STAT_TYPE_DESCRIPTIONS = {
   CRIT_DMG: 'Increases CRIT DMG',
   ATK_PERCENT: 'Increases ATK (only matters if the skill scales off ATK)',
   VULNERABILITY: 'Increases DMG the target takes from all sources',
+  ELATION_PERCENT_FLAT_ADD: "Increases the character's Elation stat by a flat amount",
+  ELATION_PERCENT_OF_SELF: "Increases the character's Elation stat by a % of their own current Elation",
   OTHER: "Doesn't map to a stat this calculator currently applies to damage",
 };
 
@@ -1038,6 +1040,15 @@ function computeScenarioTotalDamage(stats, scenario) {
     // up to 2 adjacent targets each take this reduced percent instead
     // (null/undefined for a non-Blast ability, which skips this entirely).
     calcAuthoredBlastAdjacentMultiplierPercent,
+    // Additional multiplier percentage points ADDED to
+    // calcAuthoredMultiplierPercent, scaled by the character's current
+    // Elation stat (effectiveElationPercent, computed below from the same
+    // live-fetched value ELATION_PERCENT_OF_SELF already reads). E.g.
+    // Sparxie's Ultimate is "(0.6 x Elation% + 60%) of ATK" — 60 is
+    // calcAuthoredMultiplierPercent, 0.6 is this field. 0/null/undefined
+    // for any ability whose multiplier doesn't scale with Elation (i.e.
+    // everyone else).
+    calcAuthoredMultiplierPerElationPercent,
   } = scenario;
 
   if (!stats) return null;
@@ -1084,7 +1095,27 @@ function computeScenarioTotalDamage(stats, scenario) {
     const aiCritRateBonus = sumConditionalStat('CRIT_RATE');
     const aiCritDmgBonus = sumConditionalStat('CRIT_DMG');
 
-    let aiDmgPercent = sumConditionalStat('DMG_PERCENT');
+    // Blast-portion-aware version of the sum above. Most DMG_PERCENT
+    // conditionals apply uniformly to a whole ability's damage — Engagement
+    // Farming (Sparxie) is the first case where a real kit text gives
+    // DIFFERENT percentages for a Blast ability's main-target hit vs. its
+    // adjacent-target hits. A conditional with no restrictedToBlastPortion
+    // field is included in BOTH sums below (unchanged behavior for every
+    // conditional authored before this fix); one that sets 'MAIN' or
+    // 'ADJACENT' only counts toward that portion.
+    const sumDmgPercentForBlastPortion = (portion) =>
+      matchedAll.reduce((sum, c) => {
+        if (c.statType !== 'DMG_PERCENT') return sum;
+        if (c.restrictedToBlastPortion && c.restrictedToBlastPortion !== portion) return sum;
+        const stacks = aiConditionalStacks[c.name] || 0;
+        return sum + (c.valuesByStack[stacks - 1] || 0);
+      }, 0);
+    // aiDmgPercent below is used for the main hit (and the non-Blast paths,
+    // where it's the only DMG% sum that matters) — it now excludes any
+    // ADJACENT-only conditional, which sumConditionalStat's plain unfiltered
+    // sum would have incorrectly included.
+    let aiDmgPercent = sumDmgPercentForBlastPortion('MAIN');
+    const aiDmgPercentAdjacentPortion = sumDmgPercentForBlastPortion('ADJACENT');
     let aiAtkPercentBonus = sumConditionalStat('ATK_PERCENT');
 
     const effectiveEnemyRes = calcEnemyRes - aiResPenPercent;
@@ -1107,6 +1138,12 @@ function computeScenarioTotalDamage(stats, scenario) {
       const applyBonus = (statKey, bonus) => {
         if (statKey === 'CRIT_RATE') overflowCritRateBonus += bonus;
         else if (statKey === 'CRIT_DMG') overflowCritDmgBonus += bonus;
+        // NOTE: only feeds the main-hit aiDmgPercent, not
+        // aiDmgPercentAdjacentPortion — STAT_OVERFLOW_SPLIT (Silver Wolf's
+        // Hidden MMR) has never co-occurred with a Blast-pattern ability in
+        // any authored character, so this hasn't needed fixing. If a
+        // future character combines both, the adjacent hit will be missing
+        // this bonus.
         else if (statKey === 'DMG_PERCENT') aiDmgPercent += bonus;
         else if (statKey === 'ATK_PERCENT') aiAtkPercentBonus += bonus;
       };
@@ -1116,6 +1153,15 @@ function computeScenarioTotalDamage(stats, scenario) {
 
     const effectiveCritRatePercent = baseCritRatePercent + overflowCritRateBonus;
     const effectiveCritDmgPercent = baseCritDmgPercent + overflowCritDmgBonus;
+
+    // Flat, additive Elation-stat bonus (e.g. a light cone's "all allies
+    // +X% Elation" on some trigger) — a straightforward percentage-point
+    // add, same shape as DMG_PERCENT/CRIT_RATE/etc., unlike the
+    // multiplicative-of-self case just below. Applied BEFORE any
+    // %-of-current-Elation multiplier, since a %-of-current mechanic
+    // should read the character's actual total Elation (flat buffs
+    // included), not just their unbuffed base value.
+    const aiElationFlatAddPercent = sumConditionalStat('ELATION_PERCENT_FLAT_ADD');
 
     // Self-referential Elation bonus — "increases Elation by X% of the
     // character's OWN current Elation" (e.g. Yaoguang's Zone). This is
@@ -1128,11 +1174,11 @@ function computeScenarioTotalDamage(stats, scenario) {
     // count as one of their own allies — so this fits the existing
     // single-character model cleanly.
     const elationSelfScaledConditional = matchedAll.find((c) => c.statType === 'ELATION_PERCENT_OF_SELF');
-    let effectiveElationPercent = elationPercent;
+    let effectiveElationPercent = elationPercent + aiElationFlatAddPercent;
     if (elationSelfScaledConditional) {
       const stacks = aiConditionalStacks[elationSelfScaledConditional.name] || 0;
       const selfScaleRate = elationSelfScaledConditional.valuesByStack[stacks - 1] || 0;
-      effectiveElationPercent = elationPercent * (1 + selfScaleRate / 100);
+      effectiveElationPercent = effectiveElationPercent * (1 + selfScaleRate / 100);
     }
 
     const scalingKeyAuthored = calcScalingStat ? calcScalingStat.toLowerCase() : '';
@@ -1148,7 +1194,7 @@ function computeScenarioTotalDamage(stats, scenario) {
     // adjacent-target hits below — everything except the multiplier itself
     // is identical between them, so this avoids duplicating the whole
     // computeDamage/computeElationDamage call shape twice.
-    function computeAuthoredHit(multiplierPercent) {
+    function computeAuthoredHit(multiplierPercent, dmgPercentOverride = aiDmgPercent) {
       if (isElation) {
         return computeElationDamage({
           abilityMultiplierPercent: multiplierPercent,
@@ -1174,7 +1220,7 @@ function computeScenarioTotalDamage(stats, scenario) {
         enemyLevel: calcEnemyLevel,
         enemyResPercent: effectiveEnemyRes,
         defShredPercent: effectiveDefShred,
-        elementalDmgPercent: elementalDmgPercent + allDmgPercent + aiDmgPercent,
+        elementalDmgPercent: elementalDmgPercent + allDmgPercent + dmgPercentOverride,
         critRatePercent: effectiveCritRatePercent,
         critDmgPercent: effectiveCritDmgPercent,
         vulnerabilityPercent: aiVulnerabilityPercent,
@@ -1182,7 +1228,12 @@ function computeScenarioTotalDamage(stats, scenario) {
       });
     }
 
-    const hitDamage = computeAuthoredHit(calcAuthoredMultiplierPercent);
+    const hitDamage = computeAuthoredHit(
+      calcAuthoredMultiplierPercent +
+        (calcAuthoredMultiplierPerElationPercent
+          ? calcAuthoredMultiplierPerElationPercent * effectiveElationPercent
+          : 0)
+    );
     if (hitDamage == null) return null;
 
     // Blast: main target takes the full hit above, and up to 2 adjacent
@@ -1195,7 +1246,14 @@ function computeScenarioTotalDamage(stats, scenario) {
     if (calcAuthoredBlastAdjacentMultiplierPercent != null) {
       const adjacentTargetCount = Math.max(0, Math.min(2, calcEnemyCount - 1));
       if (adjacentTargetCount > 0) {
-        const adjacentHit = computeAuthoredHit(calcAuthoredBlastAdjacentMultiplierPercent);
+        // aiDmgPercentAdjacentPortion is the FULL adjacent-hit sum already
+        // (unrestricted conditionals + ADJACENT-restricted ones) — do not
+        // add aiDmgPercent on top, that would double-count anything without
+        // a restrictedToBlastPortion (i.e. every pre-existing conditional).
+        const adjacentHit = computeAuthoredHit(
+          calcAuthoredBlastAdjacentMultiplierPercent,
+          aiDmgPercentAdjacentPortion
+        );
         if (adjacentHit != null) totalDamage += adjacentHit * adjacentTargetCount;
       }
     }
@@ -1474,6 +1532,10 @@ function computeRotationTotalDamage(stats, rows, globalScenario) {
       calcAuthoredAveragedAcrossEnemies: !!row.averagedAcrossEnemies,
       calcAuthoredHitsAllEnemies: !!row.hitsAllEnemies,
       calcAuthoredBlastAdjacentMultiplierPercent: row.blastAdjacentMultiplierPercent ?? null,
+      // Only applied to the main hit above, not a Blast adjacent-target
+      // hit — no existing authored ability needs both at once yet. If one
+      // ever does, this will need extending to scale the adjacent hit too.
+      calcAuthoredMultiplierPerElationPercent: row.authoredMultiplierPerElationPercent ?? 0,
     };
     const perHit = computeScenarioTotalDamage(stats, rowScenario);
     const rowTotal = perHit != null ? perHit * Math.max(0, row.countPerRotation) : null;
@@ -1948,6 +2010,7 @@ export default function ProfilePage() {
                 averagedAcrossEnemies: !!triggerData.averagedAcrossEnemies,
                 hitsAllEnemies: !!triggerData.hitsAllEnemies,
                 blastAdjacentMultiplierPercent: triggerData.blastAdjacentMultiplierPercent ?? null,
+                authoredMultiplierPerElationPercent: triggerData.multiplierPerElationPercent ?? 0,
                 locked: true,
               };
             }
@@ -2001,6 +2064,7 @@ export default function ProfilePage() {
               averagedAcrossEnemies: !!abilityData?.averagedAcrossEnemies,
               hitsAllEnemies: !!abilityData?.hitsAllEnemies,
               blastAdjacentMultiplierPercent: abilityData?.blastAdjacentMultiplierPercent ?? null,
+              authoredMultiplierPerElationPercent: abilityData?.multiplierPerElationPercent ?? 0,
               locked: true,
               missingSkillMatch: !skillId,
             };

@@ -1,20 +1,13 @@
+// Flat +16% CRIT Rate NOT included — always-active/unconditional, so it's
+// already reflected in the character's live-fetched CRIT Rate stat before
+// this app applies any conditionals, same rule as an unconditional relic
+// set 2pc bonus (and the same fix applied to Dazzled by a Flowery World's
+// CRIT DMG). Only the genuinely conditional entries below are included.
+
 const itemName = 'The Hell Where Ideals Burn';
 
 const conditionalsByTier = {
   passive: [
-    {
-      name: 'The Hell Where Ideals Burn CRIT Rate',
-      appliesToAbility: 'ALL',
-      restrictedToAbilityName: null,
-      sourceAbilityName: 'The Hell Where Ideals Burn (S1)',
-      statType: 'CRIT_RATE',
-      trigger: 'Always active while equipped',
-      valuesByStack: [16],
-      maxStacks: 1,
-      overflow: null,
-      suspicious: false,
-      suspiciousNote: '',
-    },
     {
       name: 'The Hell Where Ideals Burn SP-limit ATK buff',
       appliesToAbility: 'ALL',
