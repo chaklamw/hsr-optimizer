@@ -16,15 +16,12 @@
 // server/equipment/EverGloriousMagicalGirl.js and TengokuLivestream.js —
 // both match exactly, no changes needed there.
 //
-// ONE REMAINING SCHEMA GAP this kit exposes (not worked around, flagged):
-//   Two Traces convert a live/resource stat into another stat via a
-//   per-unit ramp (ATK-over-2000 -> Elation, Punchline count -> CRIT DMG).
-//   The Punchline one reasonably fits Silver Wolf's STAT_OVERFLOW_SPLIT
-//   shape (Punchline is a real in-battle resource counter, same category
-//   as Hidden MMR). The ATK one does NOT fit cleanly — it has a threshold
-//   offset (only ATK ABOVE 2000 counts) that STAT_OVERFLOW_SPLIT has no
-//   field for, and it converts a live build stat rather than a resource
-//   counter. Flagged suspicious, not force-fit.
+// ALL SCHEMA GAPS RESOLVED. Both Traces are now fully modeled: Frenzy!
+// Palette of Truth and Lies via STAT_OVERFLOW_SPLIT (Punchline is a real
+// in-battle resource counter, same category as Silver Wolf's Hidden MMR),
+// and Sweet! Punchline Signing via the new ELATION_PERCENT_ATK_THRESHOLD
+// statType (a live-stat threshold conversion, added specifically since it
+// reads Sparxie's own ATK directly rather than a resource-point count).
 //
 // FIXED: the Ultimate's "(0.6 x Elation% + 60%) of ATK" multiplier now
 // scales correctly via the new multiplierPerElationPercent ability field,
@@ -324,21 +321,30 @@ const conditionals = [
 
   // Real text: "For every 100 of Sparxie's ATK that exceeds 2000,
   // increases this unit's Elation by 5.0%, up to a maximum increase of
-  // 80.0%." Does NOT cleanly fit STAT_OVERFLOW_SPLIT: that shape assumes a
-  // resource counter accumulated in-battle (Hidden MMR, Punchline), not a
-  // live build stat (ATK) with a THRESHOLD OFFSET (only the amount above
-  // 2000 counts) — there's no field for "ignore the first N points."
-  // Left unauthored as a real conditional entry rather than force-fit;
-  // needs either a new overflow-with-threshold shape or a dedicated
-  // statType before this can be added correctly.
-  //
-  // NOT INCLUDED:
-  // {
-  //   name: 'Sweet! Punchline Signing',
-  //   sourceAbilityName: 'Sweet! Punchline Signing',
-  //   statType: 'ELATION_PERCENT... or new type needed',
-  //   trigger: 'Per 100 ATK above 2000, +5% Elation, capped at +80%',
-  // }
+  // 80.0%." Now modeled via ELATION_PERCENT_ATK_THRESHOLD, a new statType
+  // added specifically for this shape — a live-stat threshold conversion,
+  // distinct from STAT_OVERFLOW_SPLIT's in-battle resource-counter model.
+  // Reads the character's own live ATK stat directly rather than a
+  // manually-entered resource value.
+  {
+    name: 'Sweet! Punchline Signing',
+    appliesToAbility: 'ALL',
+    restrictedToAbilityName: null,
+    sourceAbilityName: 'Sweet! Punchline Signing',
+    statType: 'ELATION_PERCENT_ATK_THRESHOLD',
+    trigger: 'Always active (Trace, not equipment) — for every 100 ATK above 2000, +5% Elation, capped at +80%',
+    valuesByStack: [],
+    maxStacks: 0,
+    overflow: null,
+    atkThreshold: {
+      baseAtk: 2000,
+      atkPerUnit: 100,
+      elationPercentPerUnit: 5,
+      capPercent: 80,
+    },
+    suspicious: false,
+    suspiciousNote: '',
+  },
 ];
 
 // Best-effort rotation — FLAGGED FOR REVIEW like every other character.

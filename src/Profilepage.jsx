@@ -590,6 +590,7 @@ const STAT_TYPE_DESCRIPTIONS = {
   VULNERABILITY: 'Increases DMG the target takes from all sources',
   ELATION_PERCENT_FLAT_ADD: "Increases the character's Elation stat by a flat amount",
   ELATION_PERCENT_OF_SELF: "Increases the character's Elation stat by a % of their own current Elation",
+  ELATION_PERCENT_ATK_THRESHOLD: "Converts ATK above a threshold into Elation, capped",
   OTHER: "Doesn't map to a stat this calculator currently applies to damage",
 };
 
@@ -1163,6 +1164,24 @@ function computeScenarioTotalDamage(stats, scenario) {
     // included), not just their unbuffed base value.
     const aiElationFlatAddPercent = sumConditionalStat('ELATION_PERCENT_FLAT_ADD');
 
+    // ATK-threshold-to-Elation conversion (e.g. Sparxie's "Sweet! Punchline
+    // Signing": +5% Elation per 100 ATK above 2000, capped at +80%). Unlike
+    // STAT_OVERFLOW_SPLIT (Silver Wolf's Hidden MMR), the input here is the
+    // character's own live ATK stat, not a manually-entered resource-point
+    // count — so it reads `stats.atk` directly rather than a scenario
+    // input field. Uses the same "effective ATK" definition as an
+    // ATK-scaling ability's own damage calc (base ATK x (1 +
+    // aiAtkPercentBonus%)) so a separate ATK_PERCENT conditional correctly
+    // pushes a character over/further past the threshold too.
+    const atkThresholdConditional = matchedAll.find((c) => c.statType === 'ELATION_PERCENT_ATK_THRESHOLD');
+    let aiElationFromAtkThreshold = 0;
+    if (atkThresholdConditional?.atkThreshold && typeof stats.atk === 'number') {
+      const { baseAtk, atkPerUnit, elationPercentPerUnit, capPercent } = atkThresholdConditional.atkThreshold;
+      const effectiveAtkForThreshold = stats.atk * (1 + aiAtkPercentBonus / 100);
+      const unitsOverThreshold = Math.max(0, effectiveAtkForThreshold - baseAtk) / atkPerUnit;
+      aiElationFromAtkThreshold = Math.min(capPercent, unitsOverThreshold * elationPercentPerUnit);
+    }
+
     // Self-referential Elation bonus — "increases Elation by X% of the
     // character's OWN current Elation" (e.g. Yaoguang's Zone). This is
     // multiplicative on her own base Elation, not a flat percentage-point
@@ -1174,7 +1193,7 @@ function computeScenarioTotalDamage(stats, scenario) {
     // count as one of their own allies — so this fits the existing
     // single-character model cleanly.
     const elationSelfScaledConditional = matchedAll.find((c) => c.statType === 'ELATION_PERCENT_OF_SELF');
-    let effectiveElationPercent = elationPercent + aiElationFlatAddPercent;
+    let effectiveElationPercent = elationPercent + aiElationFlatAddPercent + aiElationFromAtkThreshold;
     if (elationSelfScaledConditional) {
       const stacks = aiConditionalStacks[elationSelfScaledConditional.name] || 0;
       const selfScaleRate = elationSelfScaledConditional.valuesByStack[stacks - 1] || 0;
@@ -2647,6 +2666,34 @@ export default function ProfilePage() {
                 const overflowConditional = allConditionals.find(
                   (c) => c.statType === 'STAT_OVERFLOW_SPLIT' && c.overflow
                 );
+                // ELATION_PERCENT_ATK_THRESHOLD (e.g. Sparxie's Sweet!
+                // Punchline Signing) has no discrete states to pick between
+                // — it's a pure function of her current ATK, always on
+                // whenever this character has the Trace, not a toggle or a
+                // stack count. Computed here as a read-only live number
+                // instead of going through the generic stack-dropdown
+                // renderer below (which was the actual bug: maxStacks: 0
+                // produced a dropdown with only "0" as an option, since
+                // this conditional was never meant to use that control at
+                // all). Uses activeStats.atk directly — does NOT account
+                // for a separate ATK_PERCENT conditional you might also
+                // have toggled on for a specific rotation row calculation,
+                // since those are row-scoped and this is a single
+                // character-level preview number, not per-row.
+                const atkThresholdConditional = allConditionals.find(
+                  (c) => c.statType === 'ELATION_PERCENT_ATK_THRESHOLD' && c.atkThreshold
+                );
+                const atkThresholdBonus = (() => {
+                  if (!atkThresholdConditional || typeof activeStats?.atk !== 'number') return null;
+                  const { baseAtk, atkPerUnit, elationPercentPerUnit, capPercent } = atkThresholdConditional.atkThreshold;
+                  const atkOverThreshold = Math.max(0, activeStats.atk - baseAtk);
+                  const rawBonus = (atkOverThreshold / atkPerUnit) * elationPercentPerUnit;
+                  return {
+                    atkOverThreshold,
+                    bonusPercent: Math.min(capPercent, rawBonus),
+                    capped: rawBonus > capPercent,
+                  };
+                })();
                 const hasElationRow = rotationRows.some((r) => r.damageType === DamageType.ELATION);
 
                 // Some abilities' own DMG multiplier escalates per cast
@@ -2910,6 +2957,17 @@ export default function ProfilePage() {
                               </label>
                             </div>
                           )}
+                          {atkThresholdConditional && atkThresholdBonus && (
+                            <div className="compare-form-row">
+                              <span className="calc-inline-label">
+                                {atkThresholdConditional.name}: always active, no selection needed — at{' '}
+                                {activeStats.atk} ATK ({atkThresholdBonus.atkOverThreshold.toFixed(0)} over the{' '}
+                                {atkThresholdConditional.atkThreshold.baseAtk} threshold), currently granting{' '}
+                                <strong>+{atkThresholdBonus.bonusPercent.toFixed(1)}% Elation</strong>
+                                {atkThresholdBonus.capped && ' (capped)'}
+                              </span>
+                            </div>
+                          )}
                           <div className="compare-form-row">
                             <label className="calc-inline-label">
                               Merrymake %
@@ -2934,6 +2992,7 @@ export default function ProfilePage() {
                         .filter(
                           (c) =>
                             c.statType !== 'STAT_OVERFLOW_SPLIT' &&
+                            c.statType !== 'ELATION_PERCENT_ATK_THRESHOLD' &&
                             c !== linkedTraceConditional &&
                             !isDuplicatePerHitTargetConditional(c, multiHitAbilityNames, perHitStackingBonus) &&
                             !selfBuffingConditionalNames.has(c.name)
@@ -2974,6 +3033,7 @@ export default function ProfilePage() {
                         .filter(
                           (c) =>
                             c.statType !== 'STAT_OVERFLOW_SPLIT' &&
+                            c.statType !== 'ELATION_PERCENT_ATK_THRESHOLD' &&
                             c !== linkedTraceConditional &&
                             !isDuplicatePerHitTargetConditional(c, multiHitAbilityNames, perHitStackingBonus) &&
                             !selfBuffingConditionalNames.has(c.name)
