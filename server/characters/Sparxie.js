@@ -352,7 +352,15 @@ const conditionals = [
 // mechanic isn't authored above pending the untruncated text.
 const rotation = [
   { abilityName: "Skill: Boom! Sparxicle's Poppin'", countPerRotation: 1 },
-  { abilityName: 'Skill: Engagement Farming', countPerRotation: 3 },
+  {
+    abilityName: 'Skill: Engagement Farming',
+    countPerRotation: 1,
+    // countPerRotation is functionally inert for this row (it deals no
+    // damage of its own — dealsNoDirectDamage: true) — the real "how many
+    // times did this trigger" count lives here instead, since that's what
+    // actually drives the DMG% bonus on Bloom! Winner Takes All's row.
+    stackingTriggers: 3,
+  },
   { abilityName: 'Basic ATK: Bloom! Winner Takes All', countPerRotation: 1 },
   { abilityName: "Ultimate: Party's Wildin' and Camera's Rollin'", countPerRotation: 1 },
   { abilityName: "Elation Skill: Signal Overflow: The Great Encore!", countPerRotation: 1 },

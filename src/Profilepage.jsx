@@ -540,6 +540,22 @@ const TYPE_TEXT_TO_ABILITY = {
   'Elation Skill': 'SKILL',
 };
 
+// Authored rotation-row ability keys follow the "TypeText: Name" convention
+// (e.g. 'Basic ATK: Bloom! Winner Takes All') documented throughout the
+// character files, but restrictedToAbilityName is always written as the
+// BARE name — matching the convention for real (non-authored) abilities,
+// where skill.name from characterSkills is already bare. Strips the
+// leading "TypeText: " prefix so authored rows compare on equal footing
+// with real ones. Uses the first colon only (not a global strip), since an
+// ability's own real name can itself contain a colon (e.g. "Elation Skill:
+// Signal Overflow: The Great Encore!" -> "Signal Overflow: The Great
+// Encore!", not just "Signal Overflow").
+function stripAuthoredAbilityTypePrefix(label) {
+  if (typeof label !== 'string') return label;
+  const match = label.match(/^[^:]+:\s*(.+)$/);
+  return match ? match[1] : label;
+}
+
 function conditionalAppliesToSkill(conditional, skillTypeText, skillName, resolvedAbilityType) {
   // A conditional whose bonus is scoped to one specific named ability
   // variant (e.g. Sparxie's "Bloom! Winner Takes All", an enhanced Basic
@@ -1018,6 +1034,16 @@ function computeScenarioTotalDamage(stats, scenario) {
     calcNonStatValue,
     calcStackingTriggers,
     calcSelfBuffCastNumber,
+    // Shared across every row in the rotation (built once from ALL rows'
+    // own stackingTriggers, keyed by each row's stripped ability name) —
+    // NOT the same as calcStackingTriggers above, which is this row's own
+    // local trigger count for the old same-row per-hit-stacking pattern.
+    // This lets a conditional whose sourceAbilityName matches a DIFFERENT
+    // row (e.g. Sparxie's "Engagement Farming" row driving a DMG_PERCENT
+    // bonus on her separate "Bloom! Winner Takes All" row) read that
+    // other row's own trigger-count input instead of requiring a
+    // redundant, disconnected manual dropdown.
+    calcSourceAbilityTriggerCounts,
     aiConditionals,
     manualConditionals,
     aiConditionalStacks,
@@ -1083,10 +1109,42 @@ function computeScenarioTotalDamage(stats, scenario) {
       ),
     ].filter((c) => !c.restrictedToDamageType || c.restrictedToDamageType === calcDamageType);
 
+    if (typeof window !== 'undefined' && window.__debugAuthoredConditionalMatching) {
+      console.log('[AUTHORED ROW]', {
+        calcAuthoredAbilityName,
+        calcAuthoredAbilityType,
+        allAiConditionalNames: aiConditionals.map((c) => ({
+          name: c.name,
+          restrictedToAbilityName: c.restrictedToAbilityName ?? null,
+          statType: c.statType,
+        })),
+        matchedNames: matchedAll.map((c) => c.name),
+        aiConditionalStacksSnapshot: { ...aiConditionalStacks },
+      });
+    }
+
+    // Resolves a conditional's effective stack count: if its
+    // sourceAbilityName matches a rotation row that's actually present
+    // (calcSourceAbilityTriggerCounts), that row's own trigger-count input
+    // wins — it's the row-driven, self-explaining count the person
+    // actually set. Falls back to the manual global dropdown
+    // (aiConditionalStacks) only when the source ability isn't its own
+    // row in the current rotation, preserving the old behavior for that
+    // case rather than silently zeroing the conditional out.
+    const resolveConditionalStacks = (c) => {
+      const rowDrivenCount = c.sourceAbilityName
+        ? calcSourceAbilityTriggerCounts?.[c.sourceAbilityName]
+        : undefined;
+      if (rowDrivenCount != null) {
+        return c.maxStacks ? Math.min(c.maxStacks, rowDrivenCount) : rowDrivenCount;
+      }
+      return aiConditionalStacks[c.name] || 0;
+    };
+
     const sumConditionalStat = (statType) =>
       matchedAll.reduce((sum, c) => {
         if (c.statType !== statType) return sum;
-        const stacks = aiConditionalStacks[c.name] || 0;
+        const stacks = resolveConditionalStacks(c);
         return sum + (c.valuesByStack[stacks - 1] || 0);
       }, 0);
 
@@ -1108,7 +1166,7 @@ function computeScenarioTotalDamage(stats, scenario) {
       matchedAll.reduce((sum, c) => {
         if (c.statType !== 'DMG_PERCENT') return sum;
         if (c.restrictedToBlastPortion && c.restrictedToBlastPortion !== portion) return sum;
-        const stacks = aiConditionalStacks[c.name] || 0;
+        const stacks = resolveConditionalStacks(c);
         return sum + (c.valuesByStack[stacks - 1] || 0);
       }, 0);
     // aiDmgPercent below is used for the main hit (and the non-Blast paths,
@@ -1195,7 +1253,7 @@ function computeScenarioTotalDamage(stats, scenario) {
     const elationSelfScaledConditional = matchedAll.find((c) => c.statType === 'ELATION_PERCENT_OF_SELF');
     let effectiveElationPercent = elationPercent + aiElationFlatAddPercent + aiElationFromAtkThreshold;
     if (elationSelfScaledConditional) {
-      const stacks = aiConditionalStacks[elationSelfScaledConditional.name] || 0;
+      const stacks = resolveConditionalStacks(elationSelfScaledConditional);
       const selfScaleRate = elationSelfScaledConditional.valuesByStack[stacks - 1] || 0;
       effectiveElationPercent = effectiveElationPercent * (1 + selfScaleRate / 100);
     }
@@ -1523,6 +1581,21 @@ function computeScenarioTotalDamage(stats, scenario) {
 // called once per row, multiplied by how many times that row occurs in one
 // rotation cycle, summed.
 function computeRotationTotalDamage(stats, rows, globalScenario) {
+  // Built once per rotation (not per row) — keyed by each row's OWN
+  // stripped ability name, holding that row's own stackingTriggers value.
+  // Lets a conditional whose sourceAbilityName matches a DIFFERENT row
+  // (e.g. Sparxie's "Engagement Farming" row driving her separate
+  // "Bloom! Winner Takes All" row) read that other row's trigger count,
+  // instead of needing a disconnected manual dropdown that has no
+  // relationship to how many times you actually put that trigger ability
+  // in the rotation.
+  const sourceAbilityTriggerCounts = {};
+  rows.forEach((r) => {
+    if (r.stackingTriggers != null) {
+      sourceAbilityTriggerCounts[stripAuthoredAbilityTypePrefix(r.label)] = r.stackingTriggers;
+    }
+  });
+
   const perRow = rows.map((row) => {
     const rowScenario = {
       ...globalScenario,
@@ -1538,6 +1611,7 @@ function computeRotationTotalDamage(stats, rows, globalScenario) {
       // ability) should be able to represent different trigger counts, not
       // mirror the same number.
       calcStackingTriggers: row.stackingTriggers ?? 0,
+      calcSourceAbilityTriggerCounts: sourceAbilityTriggerCounts,
       // Per-row like calcStackingTriggers above — two rows using the same
       // self-buffing ability (e.g. Archer's Skill cast twice in one turn)
       // represent different points in the stacking sequence, not the same
@@ -1546,7 +1620,11 @@ function computeRotationTotalDamage(stats, rows, globalScenario) {
       // Only present on rows built from a hand-authored rotation — see
       // the "AUTHORED ROW PATH" branch in computeScenarioTotalDamage.
       calcAuthoredMultiplierPercent: row.authoredMultiplierPercent ?? null,
-      calcAuthoredAbilityName: row.label,
+      // Stripped of its "TypeText: " prefix here (matching-only use) so it
+      // compares correctly against restrictedToAbilityName, which is
+      // always the bare name — row.label itself (used for display) is left
+      // untouched, still the full "TypeText: Name" string.
+      calcAuthoredAbilityName: stripAuthoredAbilityTypePrefix(row.label),
       calcAuthoredAbilityType: row.authoredAbilityType ?? null,
       calcAuthoredAveragedAcrossEnemies: !!row.averagedAcrossEnemies,
       calcAuthoredHitsAllEnemies: !!row.hitsAllEnemies,
@@ -2004,6 +2082,11 @@ export default function ProfilePage() {
                 paramIndex: 0,
                 activationIndex: 0,
                 countPerRotation: entry.countPerRotation,
+                // Lets a character file's default rotation pre-seed a
+                // starting trigger count (e.g. Sparxie's Engagement
+                // Farming row defaulting to 3) rather than every fresh
+                // page load showing 0 until manually set.
+                stackingTriggers: entry.stackingTriggers ?? 0,
                 label: entry.abilityName,
                 labelIsCustom: false,
                 damageType: triggerData.damageType === 'ELATION' ? DamageType.ELATION : DamageType.STANDARD,
@@ -2013,7 +2096,6 @@ export default function ProfilePage() {
                 nonStatValue: 0,
                 damageSourceName: null,
                 dealsNoDirectDamage: false,
-                stackingTriggers: 0,
                 selfBuffCastNumber: 1,
                 authoredMultiplierPercent: triggerData.baseMultiplierPercent,
                 // Defaults to ULT only for backward compatibility with
@@ -2067,6 +2149,7 @@ export default function ProfilePage() {
               paramIndex: 0,
               activationIndex: 0,
               countPerRotation: entry.countPerRotation,
+              stackingTriggers: entry.stackingTriggers ?? 0,
               label: entry.abilityName,
               labelIsCustom: false,
               damageType: abilityData?.damageType === 'ELATION' ? DamageType.ELATION : DamageType.STANDARD,
@@ -2076,7 +2159,6 @@ export default function ProfilePage() {
               nonStatValue: 0,
               damageSourceName: abilityData?.damageSourceName || null,
               dealsNoDirectDamage: !!abilityData?.dealsNoDirectDamage,
-              stackingTriggers: 0,
               selfBuffCastNumber: 1,
               authoredMultiplierPercent: abilityData?.baseMultiplierPercent,
               authoredAbilityType: abilityData?.abilityType || null,
@@ -2616,6 +2698,24 @@ export default function ProfilePage() {
                 // hits both get stronger with repeated triggers of some
                 // other ability. Independent of which rows are in the
                 // rotation right now.
+                //
+                // Suppressed entirely for a hand-authored character
+                // (characterKitOverride?.found === true). This pattern-
+                // detects against REAL raw kit text (allAbilities, from
+                // characterSkills) regardless of authored status — for
+                // Sparxie, her real "Engagement Farming" text matches this
+                // pattern too, which was causing TWO real bugs at once:
+                // (1) it rendered its own dedicated "X triggers" input
+                // whose resulting value is only ever consumed by the
+                // non-authored computeScenarioTotalDamage branch, so
+                // interacting with it silently did nothing for an authored
+                // row, and (2) isDuplicatePerHitTargetConditional used its
+                // presence to hide the hand-authored "Engagement Farming
+                // DMG stacks (main)/(adjacent)" conditionals from the
+                // dropdown list entirely, on the assumption they were
+                // redundant with this auto-detected mechanic — they
+                // weren't; they were the ONLY working path for an authored
+                // character, and were invisible in the UI as a result.
                 const allAbilities = skillIds
                   .map((id) => characterSkills[id])
                   .filter(Boolean)
@@ -2624,7 +2724,8 @@ export default function ProfilePage() {
                     desc: getSkillDescAtActualLevel(activeCharacter, s, skillTrees),
                   }))
                   .filter((a) => a.desc);
-                const perHitStackingBonus = getPerHitTargetStackingBonus(allAbilities);
+                const perHitStackingBonus =
+                  characterKitOverride?.found === true ? null : getPerHitTargetStackingBonus(allAbilities);
                 // Character-wide set of ability names that have their own
                 // multiple hit-target values (main + adjacent, etc.) — used
                 // to decide whether a restrictedToAbilityName conditional
@@ -2659,6 +2760,26 @@ export default function ProfilePage() {
                         const s = characterSkills[r.skillId];
                         return s && isSelfBuffingSkillConditional(c, s.name, s.type_text);
                       })
+                    )
+                    .map((c) => c.name)
+                );
+
+                // Same idea again, for a hand-authored conditional whose
+                // sourceAbilityName matches a DIFFERENT row present in the
+                // rotation (Sparxie's Engagement Farming -> Bloom!) rather
+                // than the same row. These get an inline trigger-count
+                // input on their SOURCE row (see hasAuthoredTriggerSourceInput
+                // in getRowMeta) instead of the generic dropdown, so they're
+                // excluded here the same way self-buffing ones are — but
+                // only when that source row is actually present; otherwise
+                // there's nowhere for it to show inline and it must fall
+                // back to the general list.
+                const authoredTriggerSourceConditionalNames = new Set(
+                  allConditionals
+                    .filter(
+                      (c) =>
+                        c.sourceAbilityName &&
+                        rotationRows.some((r) => stripAuthoredAbilityTypePrefix(r.label) === c.sourceAbilityName)
                     )
                     .map((c) => c.name)
                 );
@@ -2794,6 +2915,28 @@ export default function ProfilePage() {
                     ? allConditionals.filter((c) => isSelfBuffingSkillConditional(c, skill.name, skill.type_text))
                     : [];
 
+                  // Hand-authored equivalent of hasPerHitStackingInput above,
+                  // for a DIFFERENT case: a conditional whose
+                  // sourceAbilityName matches THIS row's own ability (e.g.
+                  // Sparxie's "Engagement Farming" row is the trigger
+                  // SOURCE for the DMG% bonus that applies to her separate
+                  // "Bloom! Winner Takes All" row). Shows the trigger-count
+                  // input on the SOURCE row rather than the target row, and
+                  // reuses row.stackingTriggers as the stored value — same
+                  // field the old per-hit-stacking mechanism uses, just
+                  // matched here via a hand-authored conditional's
+                  // sourceAbilityName instead of the raw-kit-text pattern
+                  // detector.
+                  const authoredTriggerSourceConditionals = row.label
+                    ? allConditionals.filter(
+                        (c) => c.sourceAbilityName === stripAuthoredAbilityTypePrefix(row.label)
+                      )
+                    : [];
+                  const hasAuthoredTriggerSourceInput = authoredTriggerSourceConditionals.length > 0;
+                  const authoredTriggerSourceMaxStacks = hasAuthoredTriggerSourceInput
+                    ? Math.max(...authoredTriggerSourceConditionals.map((c) => c.maxStacks || 0))
+                    : undefined;
+
                   return {
                     skill,
                     resolvedDesc,
@@ -2807,6 +2950,9 @@ export default function ProfilePage() {
                     hasPerHitStackingInput,
                     perHitStackingConditionals,
                     selfBuffingConditionals,
+                    hasAuthoredTriggerSourceInput,
+                    authoredTriggerSourceConditionals,
+                    authoredTriggerSourceMaxStacks,
                   };
                 }
 
@@ -2929,22 +3075,24 @@ export default function ProfilePage() {
                             </label>
                           </div>
                           <div className="compare-form-row">
-                            <label className="calc-inline-label">
+                            <label className="calc-inline-label" style={{ display: 'flex', alignItems: 'flex-start' }}>
                               <input
                                 type="checkbox"
                                 checked={calcUsingCertifiedBanger}
                                 onChange={(e) => setCalcUsingCertifiedBanger(e.target.checked)}
+                                style={{ marginTop: '3px', flexShrink: 0 }}
                               />
                               {' '}Using Certified Banger state (value above is Certified Banger, not live Punchline)
                             </label>
                           </div>
                           {overflowConditional && (
                             <div className="compare-form-row">
-                              <label className="calc-inline-label">
+                              <label className="calc-inline-label" style={{ display: 'flex', alignItems: 'flex-start' }}>
                                 <input
                                   type="checkbox"
                                   checked={calcUsingOverflowSplit}
                                   onChange={(e) => setCalcUsingOverflowSplit(e.target.checked)}
+                                  style={{ marginTop: '3px', flexShrink: 0 }}
                                 />
                                 {' '}Convert Punchline value above into "{overflowConditional.overflow.resourceLabel || overflowConditional.name}": +
                                 {overflowConditional.overflow.primaryRatePerPoint}%{' '}
@@ -2995,7 +3143,8 @@ export default function ProfilePage() {
                             c.statType !== 'ELATION_PERCENT_ATK_THRESHOLD' &&
                             c !== linkedTraceConditional &&
                             !isDuplicatePerHitTargetConditional(c, multiHitAbilityNames, perHitStackingBonus) &&
-                            !selfBuffingConditionalNames.has(c.name)
+                            !selfBuffingConditionalNames.has(c.name) &&
+                            !authoredTriggerSourceConditionalNames.has(c.name)
                         )
                         .map((c) => (
                           <div key={c.name} className="compare-form-row ai-conditional-row">
@@ -3036,7 +3185,8 @@ export default function ProfilePage() {
                             c.statType !== 'ELATION_PERCENT_ATK_THRESHOLD' &&
                             c !== linkedTraceConditional &&
                             !isDuplicatePerHitTargetConditional(c, multiHitAbilityNames, perHitStackingBonus) &&
-                            !selfBuffingConditionalNames.has(c.name)
+                            !selfBuffingConditionalNames.has(c.name) &&
+                            !authoredTriggerSourceConditionalNames.has(c.name)
                         )
                         .map((c) => (
                           <div key={c.name} className="compare-form-row ai-conditional-row">
@@ -3300,6 +3450,14 @@ export default function ProfilePage() {
                               </label>
                             </div>
 
+                            {row.dealsNoDirectDamage && meta.hasAuthoredTriggerSourceInput && (
+                              <p className="compare-ocr-note">
+                                ℹ️ ×/rotation doesn't affect anything here — this ability deals no damage of its
+                                own. Use "Triggers this rotation" below instead, which actually drives the bonus
+                                on whichever ability this triggers.
+                              </p>
+                            )}
+
                             {meta.hasTurnPositionSelector && (
                               <div className="compare-form-row">
                                 <span className="calc-inline-label">
@@ -3350,6 +3508,31 @@ export default function ProfilePage() {
                                     const clamped =
                                       perHitStackingBonus.maxTriggers != null
                                         ? Math.min(perHitStackingBonus.maxTriggers, raw)
+                                        : raw;
+                                    updateRotationRow(row.id, { stackingTriggers: clamped });
+                                  }}
+                                />
+                              </div>
+                            )}
+
+                            {meta.hasAuthoredTriggerSourceInput && (
+                              <div className="compare-form-row">
+                                <span className="calc-inline-label">
+                                  Triggers this rotation
+                                  {meta.authoredTriggerSourceConditionals.map((c) => (
+                                    <ConditionalHelpTooltip key={c.name} c={c} />
+                                  ))}
+                                </span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max={meta.authoredTriggerSourceMaxStacks ?? undefined}
+                                  value={row.stackingTriggers ?? 0}
+                                  onChange={(e) => {
+                                    const raw = Math.max(0, Number(e.target.value) || 0);
+                                    const clamped =
+                                      meta.authoredTriggerSourceMaxStacks != null
+                                        ? Math.min(meta.authoredTriggerSourceMaxStacks, raw)
                                         : raw;
                                     updateRotationRow(row.id, { stackingTriggers: clamped });
                                   }}
