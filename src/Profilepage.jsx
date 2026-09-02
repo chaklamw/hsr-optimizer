@@ -679,6 +679,15 @@ function ConditionalHelpTooltip({ c }) {
               left: tooltipPos.left,
               bottom: tooltipPos.bottom,
               width: tooltipPos.width,
+              // Defensive cap — a conditional with many stack levels (e.g.
+              // 20, like Sparxie's Engagement Farming) rendering one line
+              // per stack could otherwise grow taller than the viewport
+              // with no way to see the rest. portions (below) avoids this
+              // for row-driven conditionals by showing only the live
+              // resolved value instead of every possible stack, but this
+              // stays as a general safety net for any other conditional.
+              maxHeight: '60vh',
+              overflowY: 'auto',
             }}
           >
             <p className="conditional-tooltip-trigger">{c.trigger || '(no description provided)'}</p>
@@ -695,7 +704,21 @@ function ConditionalHelpTooltip({ c }) {
                 ? c.appliesToAbility.join(' and ')
                 : c.appliesToAbility}
             </p>
-            {c.valuesByStack.length > 1 ? (
+            {c.portions ? (
+              // Merged view for multiple conditionals on the same ability
+              // that differ only by which portion of the hit they apply to
+              // (e.g. Engagement Farming's separate main/adjacent DMG%) —
+              // one tooltip instead of one per portion, showing the live
+              // resolved value at the row's current trigger count rather
+              // than enumerating every possible stack level.
+              <ul className="conditional-tooltip-stacks">
+                {c.portions.map((p) => (
+                  <li key={p.label}>
+                    {p.label}: +{p.value}%
+                  </li>
+                ))}
+              </ul>
+            ) : c.valuesByStack.length > 1 ? (
               <ul className="conditional-tooltip-stacks">
                 {c.valuesByStack.map((v, i) => (
                   <li key={i}>
@@ -3515,30 +3538,58 @@ export default function ProfilePage() {
                               </div>
                             )}
 
-                            {meta.hasAuthoredTriggerSourceInput && (
-                              <div className="compare-form-row">
-                                <span className="calc-inline-label">
-                                  Triggers this rotation
-                                  {meta.authoredTriggerSourceConditionals.map((c) => (
-                                    <ConditionalHelpTooltip key={c.name} c={c} />
-                                  ))}
-                                </span>
-                                <input
-                                  type="number"
-                                  min="0"
-                                  max={meta.authoredTriggerSourceMaxStacks ?? undefined}
-                                  value={row.stackingTriggers ?? 0}
-                                  onChange={(e) => {
-                                    const raw = Math.max(0, Number(e.target.value) || 0);
-                                    const clamped =
-                                      meta.authoredTriggerSourceMaxStacks != null
-                                        ? Math.min(meta.authoredTriggerSourceMaxStacks, raw)
-                                        : raw;
-                                    updateRotationRow(row.id, { stackingTriggers: clamped });
-                                  }}
-                                />
-                              </div>
-                            )}
+                            {meta.hasAuthoredTriggerSourceInput && (() => {
+                              // One merged tooltip instead of one per
+                              // conditional — same ability, same trigger
+                              // source, just different portions of the
+                              // hit (main-target vs. adjacent-target).
+                              // Shows the LIVE resolved value at this row's
+                              // current trigger count rather than every
+                              // possible stack level, which is both more
+                              // useful (it's the number actually being
+                              // used right now) and far more compact than
+                              // listing out all 20 stacks.
+                              const liveStacks = meta.authoredTriggerSourceMaxStacks
+                                ? Math.min(meta.authoredTriggerSourceMaxStacks, row.stackingTriggers ?? 0)
+                                : row.stackingTriggers ?? 0;
+                              const portions = meta.authoredTriggerSourceConditionals.map((c) => ({
+                                label:
+                                  c.restrictedToBlastPortion === 'MAIN'
+                                    ? 'Main hit'
+                                    : c.restrictedToBlastPortion === 'ADJACENT'
+                                    ? 'Adjacent hit'
+                                    : c.name,
+                                value: c.valuesByStack[liveStacks - 1] || 0,
+                              }));
+                              const first = meta.authoredTriggerSourceConditionals[0];
+                              const mergedConditional = {
+                                ...first,
+                                trigger: `Each "${first.sourceAbilityName}" trigger boosts "${first.restrictedToAbilityName}" — set with the input to the right, currently ${liveStacks} trigger${liveStacks === 1 ? '' : 's'}`,
+                                portions,
+                              };
+                              return (
+                                <div className="compare-form-row">
+                                  <span className="calc-inline-label">
+                                    Triggers this rotation
+                                    <ConditionalHelpTooltip c={mergedConditional} />
+                                  </span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    max={meta.authoredTriggerSourceMaxStacks ?? undefined}
+                                    value={row.stackingTriggers ?? 0}
+                                    onChange={(e) => {
+                                      const raw = Math.max(0, Number(e.target.value) || 0);
+                                      const clamped =
+                                        meta.authoredTriggerSourceMaxStacks != null
+                                          ? Math.min(meta.authoredTriggerSourceMaxStacks, raw)
+                                          : raw;
+                                      updateRotationRow(row.id, { stackingTriggers: clamped });
+                                    }}
+                                  />
+                                </div>
+                              );
+                            })()}
 
                             {meta.skill && (
                               <>
