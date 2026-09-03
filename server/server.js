@@ -6,13 +6,13 @@ import express from 'express';
 import cors from 'cors';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.join(__dirname, '.env') });
+dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
 const app = express();
 const PORT = 3001;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '8mb' }));
 
 // Kit and equipment conditionals now come exclusively from
 // server/characters/*.js and server/equipment/*.js — see
@@ -110,8 +110,26 @@ function extractJsonObject(rawContent) {
   }
 }
 
-async function callGroqJson({ systemPrompt, userPrompt, reasoningEffort = 'low', maxTokens = 2048 }) {
-  const promptTokenEstimate = estimateTokenCount(systemPrompt) + estimateTokenCount(userPrompt);
+const GROQ_TEXT_MODEL = 'openai/gpt-oss-120b';
+const GROQ_VISION_MODEL = 'qwen/qwen3.8-27b';
+
+// A fixed, deliberately generous per-image token estimate for TPM
+// budgeting. Groq doesn't report a simple char-based cost for image
+// tokens the way it does for text, so this errs high (same "estimate
+// high, request low" bias as estimateTokenCount above) rather than
+// risking a 413 on the actual request.
+const GROQ_IMAGE_TOKEN_ESTIMATE = 1500;
+
+async function callGroqJson({
+  systemPrompt,
+  userPrompt,
+  imageDataUrl = null,
+  model = GROQ_TEXT_MODEL,
+  reasoningEffort = 'low',
+  maxTokens = 2048,
+}) {
+  const promptTokenEstimate =
+    estimateTokenCount(systemPrompt) + estimateTokenCount(userPrompt) + (imageDataUrl ? GROQ_IMAGE_TOKEN_ESTIMATE : 0);
   const availableBudget = GROQ_TPM_LIMIT - GROQ_TPM_SAFETY_MARGIN - promptTokenEstimate;
   const effectiveMaxTokens = Math.max(512, Math.min(maxTokens, availableBudget));
 
@@ -121,6 +139,13 @@ async function callGroqJson({ systemPrompt, userPrompt, reasoningEffort = 'low',
     );
   }
 
+  const userContent = imageDataUrl
+    ? [
+        { type: 'text', text: userPrompt },
+        { type: 'image_url', image_url: { url: imageDataUrl } },
+      ]
+    : userPrompt;
+
   async function requestCompletion(useJsonObjectMode) {
     return fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -129,15 +154,17 @@ async function callGroqJson({ systemPrompt, userPrompt, reasoningEffort = 'low',
         Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
       },
       body: JSON.stringify({
-        model: 'openai/gpt-oss-120b',
+        model,
         messages: [
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
+          { role: 'user', content: userContent },
         ],
         temperature: 0,
         max_tokens: effectiveMaxTokens,
-        reasoning_effort: reasoningEffort,
-        reasoning_format: 'hidden',
+        // reasoning_effort/reasoning_format are gpt-oss (Harmony format)
+        // specific — omit them for other models rather than risk a
+        // rejected request over an unrecognized field.
+        ...(model === GROQ_TEXT_MODEL ? { reasoning_effort: reasoningEffort, reasoning_format: 'hidden' } : {}),
         ...(useJsonObjectMode ? { response_format: { type: 'json_object' } } : {}),
       }),
     });
@@ -410,6 +437,100 @@ app.post('/api/extract-conditionals', async (req, res) => {
     cached: true,
     extractedAt: new Date().toISOString(),
   });
+});
+
+// Groq's hard cap for a base64-encoded image in a single request.
+const GROQ_BASE64_IMAGE_LIMIT = 4 * 1024 * 1024;
+
+// Replaces the old client-side Tesseract OCR flow. The client sends the
+// closed lists of set names/stat labels that are actually valid for this
+// relic slot (it already owns that StarRailRes-derived data) so the model
+// is picking from a known set rather than free-generating a name, which
+// keeps hallucination risk down. Everything the model returns is
+// re-validated against those same lists below before being sent back —
+// a value outside what was offered is treated as "not detected" rather
+// than trusted.
+app.post('/api/analyze-relic-image', async (req, res) => {
+  const { image, slotType, validSetNames, mainStatLabels, substatLabels } = req.body;
+
+  if (!image || typeof image !== 'string' || !image.startsWith('data:image/')) {
+    res.status(400).json({ error: 'Missing or invalid "image" data URL in request body' });
+    return;
+  }
+  if (image.length > GROQ_BASE64_IMAGE_LIMIT) {
+    res.status(413).json({ error: 'That screenshot is too large — try a tighter crop of just the relic stat panel.' });
+    return;
+  }
+  if (!Number.isInteger(slotType) || slotType < 1 || slotType > 6) {
+    res.status(400).json({ error: 'Missing or invalid "slotType" (expected 1-6)' });
+    return;
+  }
+  if (!Array.isArray(validSetNames) || validSetNames.length === 0) {
+    res.status(400).json({ error: 'Missing non-empty "validSetNames" array' });
+    return;
+  }
+  if (!Array.isArray(mainStatLabels) || mainStatLabels.length === 0) {
+    res.status(400).json({ error: 'Missing non-empty "mainStatLabels" array' });
+    return;
+  }
+  if (!Array.isArray(substatLabels) || substatLabels.length === 0) {
+    res.status(400).json({ error: 'Missing non-empty "substatLabels" array' });
+    return;
+  }
+
+  const systemPrompt =
+    'You read Honkai: Star Rail relic screenshots and report exactly what is printed on the panel. Never guess, infer, or include a value that is not visibly present. Respond with JSON only, no markdown fences, no commentary.';
+
+  const userPrompt = `This image is a screenshot of a single Honkai: Star Rail relic or planar ornament's stat panel.
+
+Identify the relic SET NAME. It must be exactly one of this list, or null if none match confidently:
+${validSetNames.map((n) => `- ${n}`).join('\n')}
+
+Identify the MAIN STAT. Its label must be exactly one of this list, or null if unreadable:
+${mainStatLabels.map((n) => `- ${n}`).join('\n')}
+
+Identify only the SUBSTATS actually visible on the panel (there may be up to 4). Each label must be exactly one of this list:
+${substatLabels.map((n) => `- ${n}`).join('\n')}
+
+Respond with ONLY this JSON shape:
+{"setName": "<exact string from the set list, or null>", "mainStat": {"label": "<exact string from the main stat list>", "value": <number>} or null, "substats": [{"label": "<exact string from the substat list>", "value": <number>}]}
+
+Substat and main stat values are exactly as printed on the panel (e.g. "12.4%" -> 12.4, "+42" -> 42) — do not divide percentages by 100.`;
+
+  const result = await callGroqJsonWithRetry({
+    systemPrompt,
+    userPrompt,
+    imageDataUrl: image,
+    model: GROQ_VISION_MODEL,
+    maxTokens: 1024,
+  });
+
+  if (result.error) {
+    console.log('Relic image analysis failed:', result.error);
+    res.status(result.status || 500).json({ error: result.error });
+    return;
+  }
+
+  const parsed = result.parsed || {};
+  const setName = validSetNames.includes(parsed.setName) ? parsed.setName : null;
+
+  let mainStat = null;
+  if (
+    parsed.mainStat &&
+    mainStatLabels.includes(parsed.mainStat.label) &&
+    Number.isFinite(Number(parsed.mainStat.value))
+  ) {
+    mainStat = { label: parsed.mainStat.label, value: Number(parsed.mainStat.value) };
+  }
+
+  const substats = Array.isArray(parsed.substats)
+    ? parsed.substats
+        .filter((s) => s && substatLabels.includes(s.label) && Number.isFinite(Number(s.value)))
+        .map((s) => ({ label: s.label, value: Number(s.value) }))
+        .slice(0, 4)
+    : [];
+
+  res.json({ setName, mainStat, substats });
 });
 
 app.listen(PORT, () => {

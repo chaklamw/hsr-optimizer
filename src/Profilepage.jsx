@@ -122,107 +122,8 @@ const SUBSTAT_TYPES = [
   'BreakDamageAddedRatioBase',
 ];
 
-// For OCR parsing: each substat's in-game label is ambiguous between its
-// flat and percent variant (both just say "HP", "ATK", "DEF") — the only
-// way to tell them apart from raw text is whether a "%" follows the
-// number. Ordered longest-label-first so e.g. "CRIT DMG" is tried before
-// a shorter label that might accidentally match part of it.
-const SUBSTAT_OCR_PATTERNS = [
-  { label: 'Effect Hit Rate', type: 'StatusProbabilityBase' },
-  { label: 'Effect RES', type: 'StatusResistanceBase' },
-  { label: 'Break Effect', type: 'BreakDamageAddedRatioBase' },
-  { label: 'CRIT Rate', type: 'CriticalChanceBase' },
-  { label: 'CRIT DMG', type: 'CriticalDamageBase' },
-  { label: 'SPD', type: 'SpeedDelta' },
-  { label: 'HP', percentType: 'HPAddedRatio', flatType: 'HPDelta' },
-  { label: 'ATK', percentType: 'AttackAddedRatio', flatType: 'AttackDelta' },
-  { label: 'DEF', percentType: 'DefenceAddedRatio', flatType: 'DefenceDelta' },
-];
-
-// Generous upper bounds a single relic substat could ever plausibly reach
-// (well above any realistic max-roll total), used only to catch OCR
-// clearly picking up an unrelated number from elsewhere in a busy
-// screenshot — not meant to be a precise in-game formula.
-const SUBSTAT_SANITY_MAX = {
-  HPDelta: 300,
-  AttackDelta: 150,
-  DefenceDelta: 150,
-  SpeedDelta: 25,
-  HPAddedRatio: 100,
-  AttackAddedRatio: 100,
-  DefenceAddedRatio: 100,
-  CriticalChanceBase: 100,
-  CriticalDamageBase: 100,
-  StatusProbabilityBase: 100,
-  StatusResistanceBase: 100,
-  BreakDamageAddedRatioBase: 100,
-};
-
-function parseSubstatsFromText(rawText) {
-  const text = rawText.replace(/\s+/g, ' ');
-  const found = [];
-  const usedTypes = new Set();
-
-  SUBSTAT_OCR_PATTERNS.forEach(({ label, type, percentType, flatType }) => {
-    // OCR sometimes drops spaces between words ("CRIT DMG" -> "CRITDMG"),
-    // so match on flexible whitespace rather than a literal space.
-    const flexibleLabel = label.replace(/\s+/g, '\\s*');
-    const pattern = new RegExp(`${flexibleLabel}[^0-9+\\-]{0,6}([+\\-]?\\d+\\.?\\d*)(\\s*%)?`, 'gi');
-    const matches = [...text.matchAll(pattern)];
-    if (matches.length === 0) return;
-
-    // A label like "ATK" can appear twice — once for the main stat, once
-    // for the substat. The main stat mention comes first in reading
-    // order, so scan from the last match backward for the first one that
-    // survives sanity checks (most likely the real substat).
-    for (let i = matches.length - 1; i >= 0; i--) {
-      const match = matches[i];
-      const value = parseFloat(match[1]);
-      if (Number.isNaN(value) || value <= 0) continue;
-
-      const hasPercent = Boolean(match[2]);
-      const resolvedType = type || (hasPercent ? percentType : flatType);
-      if (value > (SUBSTAT_SANITY_MAX[resolvedType] ?? Infinity)) continue;
-      if (usedTypes.has(resolvedType)) continue;
-
-      usedTypes.add(resolvedType);
-      // Stored in human-readable display units (e.g. 4.3 for "4.3%", 42 for
-      // flat HP) — matches how the comparison form's manual entry works,
-      // not the fraction units relic._flat uses internally.
-      found.push({ type: resolvedType, value: String(value) });
-      break;
-    }
-  });
-
-  return found.slice(0, 4);
-}
-
-function parseMainStatFromText(rawText, mainOptions) {
-  const text = rawText.replace(/\s+/g, ' ');
-  let best = null;
-
-  mainOptions.forEach((statType) => {
-    // STAT_LABELS has entries like 'HP%' with the % baked into the label
-    // text, but OCR renders the % separately after the number (not
-    // glued to the label) — strip it so the search term matches reality.
-    const cleanLabel = (STAT_LABELS[statType] || statType).replace(/%$/, '').trim();
-    const flexibleLabel = cleanLabel.replace(/\s+/g, '\\s*');
-    const pattern = new RegExp(`${flexibleLabel}[^0-9+\\-]{0,6}([+\\-]?\\d+\\.?\\d*)(\\s*%)?`, 'i');
-    const match = text.match(pattern);
-    if (!match) return;
-
-    const value = parseFloat(match[1]);
-    if (Number.isNaN(value) || value <= 0) return;
-
-    // The main stat is always the first stat line in the panel, so among
-    // all candidate labels that matched something, prefer whichever one
-    // starts earliest in the text.
-    if (best === null || match.index < best.index) {
-      best = { type: statType, value: String(value), index: match.index };
-    }
-  });
-
-  return best ? { type: best.type, value: best.value } : null;
+function findStatTypeByLabel(candidateTypes, label) {
+  return candidateTypes.find((type) => (STAT_LABELS[type] || type) === label) || '';
 }
 
 function getMainStatOptions(relicMainAffixes, type) {
@@ -251,6 +152,24 @@ const RELIC_TYPE_LABELS = {
   5: 'Planar Sphere',
   6: 'Link Rope',
 };
+
+function getValidRelicSets(relicSets, slotType) {
+  const wantCavern = slotType <= 4;
+  return Object.values(relicSets)
+    .filter((set) => (Math.floor(Number(set.id) / 100) === 1) === wantCavern)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function analyzeRelicImage({ imageDataUrl, slotType, validSetNames, mainStatLabels, substatLabels }) {
+  const res = await fetch('http://localhost:3001/api/analyze-relic-image', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image: imageDataUrl, slotType, validSetNames, mainStatLabels, substatLabels }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Server responded ${res.status}`);
+  return data;
+}
 
 function getRelicIconUrl(relic) {
   const setID = relic._flat.setID;
@@ -965,9 +884,10 @@ function computeFinalStats(character, promotions, relicSets, skillTrees, lightCo
 // fraction units _flat.props uses internally — flat stat types (HP/ATK/
 // DEF/SPD Delta) are used as-is.
 //
-// Assumes the new relic keeps the same set as the piece it's replacing,
-// since the compare form has no way to specify a different set — swapping
-// sets isn't something this handles yet.
+// setID is passed in by the caller — usually the equipped piece's own
+// set, but the compare form also allows overriding it to a different set
+// (e.g. after a Groq-detected relic turns out to belong to a different
+// set than what's currently equipped in that slot).
 function buildSyntheticRelic(slotType, setID, mainStat, substats) {
   const props = [];
 
@@ -1685,6 +1605,7 @@ export default function ProfilePage() {
   const [loadedCount, setLoadedCount] = useState(0);
   const [selectedId, setSelectedId] = useState(null);
   const [compareSlot, setCompareSlot] = useState(null);
+  const [compareSetID, setCompareSetID] = useState(null);
   const [compareMainStat, setCompareMainStat] = useState({ type: '', value: '' });
   const [compareSubstats, setCompareSubstats] = useState([
     { type: '', value: '' },
@@ -1757,26 +1678,51 @@ export default function ProfilePage() {
     setOcrPreviewUrl(URL.createObjectURL(file));
     setOcrStatus('scanning');
     try {
-      // Loaded on demand so the OCR library (WASM, a few MB) doesn't
-      // bloat the initial page load for people who never use this.
-      const { createWorker } = await import('tesseract.js');
-      const worker = await createWorker('eng');
-      const { data: { text } } = await worker.recognize(file);
-      await worker.terminate();
+      const imageDataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
+        reader.readAsDataURL(file);
+      });
 
       const mainOptions = getMainStatOptions(relicMainAffixes, compareSlot);
-      const mainMatch = parseMainStatFromText(text, mainOptions);
-      if (mainMatch) {
-        setCompareMainStat({ type: mainMatch.type, value: mainMatch.value });
+      const mainStatLabels = mainOptions.map((type) => STAT_LABELS[type] || type);
+      const substatLabels = SUBSTAT_TYPES.map((type) => STAT_LABELS[type] || type);
+      const validRelicSets = getValidRelicSets(relicSets, compareSlot);
+      const validSetNames = validRelicSets.map((set) => set.name);
+
+      const result = await analyzeRelicImage({
+        imageDataUrl,
+        slotType: compareSlot,
+        validSetNames,
+        mainStatLabels,
+        substatLabels,
+      });
+
+      if (result.setName) {
+        const matchedSet = validRelicSets.find((set) => set.name === result.setName);
+        if (matchedSet) setCompareSetID(matchedSet.id);
       }
 
-      const parsed = parseSubstatsFromText(text);
-      const padded = [...parsed];
+      let mainMatch = null;
+      if (result.mainStat) {
+        const matchedType = findStatTypeByLabel(mainOptions, result.mainStat.label);
+        if (matchedType) {
+          mainMatch = { type: matchedType, value: String(result.mainStat.value) };
+          setCompareMainStat(mainMatch);
+        }
+      }
+
+      const matchedSubstats = (result.substats || [])
+        .map((s) => ({ type: findStatTypeByLabel(SUBSTAT_TYPES, s.label), value: String(s.value) }))
+        .filter((s) => s.type);
+      const padded = [...matchedSubstats];
       while (padded.length < 4) padded.push({ type: '', value: '' });
       setCompareSubstats(padded);
-      setOcrStatus(parsed.length > 0 || mainMatch ? 'done' : 'no-match');
+
+      setOcrStatus(matchedSubstats.length > 0 || mainMatch || result.setName ? 'done' : 'no-match');
     } catch (err) {
-      console.error('OCR failed:', err);
+      console.error('Relic image analysis failed:', err);
       setOcrStatus('error');
     }
   }
@@ -2377,6 +2323,7 @@ export default function ProfilePage() {
                               onClick={() => {
                                 const options = getMainStatOptions(relicMainAffixes, relic.type);
                                 setCompareSlot(relic.type);
+                                setCompareSetID(null);
                                 setCompareMainStat({
                                   type: options.length === 1 ? options[0] : '',
                                   value: '',
@@ -2451,6 +2398,8 @@ export default function ProfilePage() {
                 const equippedRelic = activeCharacter.relicList.find((r) => r.type === compareSlot);
                 const [eqMain, ...eqSubs] = equippedRelic._flat.props;
                 const mainOptions = getMainStatOptions(relicMainAffixes, compareSlot);
+                const validRelicSets = getValidRelicSets(relicSets, compareSlot);
+                const effectiveSetID = compareSetID || equippedRelic._flat.setID;
                 const usedTypes = new Set(
                   [compareMainStat.type, ...compareSubstats.map((s) => s.type)].filter(Boolean)
                 );
@@ -2471,7 +2420,7 @@ export default function ProfilePage() {
                 if (rotationRows.length > 0 && newRelicFormComplete) {
                   const syntheticRelic = buildSyntheticRelic(
                     compareSlot,
-                    equippedRelic._flat.setID,
+                    effectiveSetID,
                     compareMainStat,
                     compareSubstats
                   );
@@ -2600,6 +2549,25 @@ export default function ProfilePage() {
                           {ocrStatus === 'error' && (
                             <p className="compare-ocr-note compare-ocr-note-warn">
                               Something went wrong reading that image — fill in manually below.
+                            </p>
+                          )}
+
+                          <div className="compare-form-row">
+                            <select
+                              value={effectiveSetID}
+                              onChange={(e) => setCompareSetID(e.target.value)}
+                            >
+                              {validRelicSets.map((set) => (
+                                <option key={set.id} value={set.id}>
+                                  {set.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          {effectiveSetID !== equippedRelic._flat.setID && (
+                            <p className="compare-ocr-note">
+                              Set changed from {relicSets[equippedRelic._flat.setID]?.name} — the comparison assumes
+                              this new set is equipped instead.
                             </p>
                           )}
 
