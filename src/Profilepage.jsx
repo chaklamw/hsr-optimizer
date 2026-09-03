@@ -526,6 +526,8 @@ const STAT_TYPE_DESCRIPTIONS = {
   ELATION_PERCENT_FLAT_ADD: "Increases the character's Elation stat by a flat amount",
   ELATION_PERCENT_OF_SELF: "Increases the character's Elation stat by a % of their own current Elation",
   ELATION_PERCENT_ATK_THRESHOLD: "Converts ATK above a threshold into Elation, capped",
+  ELATION_PERCENT_SPD_THRESHOLD:
+    "Grants a base Elation % once SPD reaches a threshold, plus more per SPD point above it, capped by a max excess SPD",
   OTHER: "Doesn't map to a stat this calculator currently applies to damage",
 };
 
@@ -1193,8 +1195,27 @@ function computeScenarioTotalDamage(stats, scenario) {
     // OWN "all allies" effect isn't a cross-character-buff problem — they
     // count as one of their own allies — so this fits the existing
     // single-character model cleanly.
+    // SPD-threshold-to-Elation conversion (e.g. Silver Wolf LV.999's False
+    // Ending Speedrun: at 160+ SPD, +50% Elation, then +2% per SPD point
+    // above 160, up to 100 excess SPD counted). Same live-stat-driven shape
+    // as ELATION_PERCENT_ATK_THRESHOLD above, but with a base % granted
+    // immediately at the threshold rather than scaling purely linearly from
+    // zero, and the excess is capped by a max SPD amount rather than a
+    // total percent cap.
+    const spdThresholdConditional = matchedAll.find((c) => c.statType === 'ELATION_PERCENT_SPD_THRESHOLD');
+    let aiElationFromSpdThreshold = 0;
+    if (spdThresholdConditional?.spdThreshold && typeof stats.spd === 'number') {
+      const { baseSpd, basePercent, spdPerUnit, elationPercentPerUnit, maxExcessSpd } =
+        spdThresholdConditional.spdThreshold;
+      if (stats.spd >= baseSpd) {
+        const excessSpd = Math.min(maxExcessSpd, stats.spd - baseSpd);
+        aiElationFromSpdThreshold = basePercent + (excessSpd / spdPerUnit) * elationPercentPerUnit;
+      }
+    }
+
     const elationSelfScaledConditional = matchedAll.find((c) => c.statType === 'ELATION_PERCENT_OF_SELF');
-    let effectiveElationPercent = elationPercent + aiElationFlatAddPercent + aiElationFromAtkThreshold;
+    let effectiveElationPercent =
+      elationPercent + aiElationFlatAddPercent + aiElationFromAtkThreshold + aiElationFromSpdThreshold;
     if (elationSelfScaledConditional) {
       const stacks = resolveConditionalStacks(elationSelfScaledConditional);
       const selfScaleRate = elationSelfScaledConditional.valuesByStack[stacks - 1] || 0;
@@ -2806,6 +2827,25 @@ export default function ProfilePage() {
                     capped: rawBonus > capPercent,
                   };
                 })();
+                const spdThresholdConditional = allConditionals.find(
+                  (c) => c.statType === 'ELATION_PERCENT_SPD_THRESHOLD' && c.spdThreshold
+                );
+                const spdThresholdBonus = (() => {
+                  if (!spdThresholdConditional || typeof activeStats?.spd !== 'number') return null;
+                  const { baseSpd, basePercent, spdPerUnit, elationPercentPerUnit, maxExcessSpd } =
+                    spdThresholdConditional.spdThreshold;
+                  if (activeStats.spd < baseSpd) {
+                    return { met: false, spdOverThreshold: 0, bonusPercent: 0, capped: false };
+                  }
+                  const spdOverThreshold = activeStats.spd - baseSpd;
+                  const excessSpd = Math.min(maxExcessSpd, spdOverThreshold);
+                  return {
+                    met: true,
+                    spdOverThreshold,
+                    bonusPercent: basePercent + (excessSpd / spdPerUnit) * elationPercentPerUnit,
+                    capped: spdOverThreshold > maxExcessSpd,
+                  };
+                })();
                 const hasElationRow = rotationRows.some((r) => r.damageType === DamageType.ELATION);
 
                 // Some abilities' own DMG multiplier escalates per cast
@@ -3107,6 +3147,27 @@ export default function ProfilePage() {
                               </span>
                             </div>
                           )}
+                          {spdThresholdConditional && spdThresholdBonus && (
+                            <div className="compare-form-row">
+                              <span className="calc-inline-label">
+                                {spdThresholdConditional.name}: always active, no selection needed — at{' '}
+                                {activeStats.spd} SPD
+                                {spdThresholdBonus.met ? (
+                                  <>
+                                    {' '}({spdThresholdBonus.spdOverThreshold.toFixed(0)} over the{' '}
+                                    {spdThresholdConditional.spdThreshold.baseSpd} threshold), currently granting{' '}
+                                    <strong>+{spdThresholdBonus.bonusPercent.toFixed(1)}% Elation</strong>
+                                    {spdThresholdBonus.capped && ' (capped)'}
+                                  </>
+                                ) : (
+                                  <>
+                                    {' '}— below the {spdThresholdConditional.spdThreshold.baseSpd} threshold, not
+                                    currently active
+                                  </>
+                                )}
+                              </span>
+                            </div>
+                          )}
                           <div className="compare-form-row">
                             <label className="calc-inline-label">
                               Merrymake %
@@ -3132,6 +3193,7 @@ export default function ProfilePage() {
                           (c) =>
                             c.statType !== 'STAT_OVERFLOW_SPLIT' &&
                             c.statType !== 'ELATION_PERCENT_ATK_THRESHOLD' &&
+                            c.statType !== 'ELATION_PERCENT_SPD_THRESHOLD' &&
                             c !== linkedTraceConditional &&
                             !isDuplicatePerHitTargetConditional(c, multiHitAbilityNames, perHitStackingBonus) &&
                             !selfBuffingConditionalNames.has(c.name) &&
@@ -3174,6 +3236,7 @@ export default function ProfilePage() {
                           (c) =>
                             c.statType !== 'STAT_OVERFLOW_SPLIT' &&
                             c.statType !== 'ELATION_PERCENT_ATK_THRESHOLD' &&
+                            c.statType !== 'ELATION_PERCENT_SPD_THRESHOLD' &&
                             c !== linkedTraceConditional &&
                             !isDuplicatePerHitTargetConditional(c, multiHitAbilityNames, perHitStackingBonus) &&
                             !selfBuffingConditionalNames.has(c.name) &&

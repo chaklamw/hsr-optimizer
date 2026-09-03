@@ -128,6 +128,27 @@ const conditionals = [
     suspiciousNote: '',
   },
 
+  {
+    name: 'False Ending Speedrun (SPD → Elation)',
+    appliesToAbility: 'ALL',
+    restrictedToAbilityName: null,
+    sourceAbilityName: 'Trace: False Ending Speedrun',
+    statType: 'ELATION_PERCENT_SPD_THRESHOLD',
+    trigger:
+      'When SPD is 160 or higher, increases Elation by 50%. For every 1 SPD exceeded, increases Elation by 2%, up to a max of 100 excess SPD taken into account.',
+    valuesByStack: [],
+    maxStacks: 0,
+    spdThreshold: {
+      baseSpd: 160,
+      basePercent: 50,
+      spdPerUnit: 1,
+      elationPercentPerUnit: 2,
+      maxExcessSpd: 100,
+    },
+    suspicious: false,
+    suspiciousNote: '',
+  },
+
   // Deliberately dropped: the old cache's "Hidden MMR DMG Boost"
   // (15%/30% per 60 Hidden MMR) doesn't appear anywhere in the real kit,
   // relic, or light cone text pulled for this character. Likely a Groq
