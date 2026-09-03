@@ -126,6 +126,35 @@ function findStatTypeByLabel(candidateTypes, label) {
   return candidateTypes.find((type) => (STAT_LABELS[type] || type) === label) || '';
 }
 
+// character.skillTreeList only contains nodes the account has actually
+// allocated — an unallocated trace simply isn't in the list at all, same
+// as what the "Trace Nodes" detail panel already reads to decide what to
+// display. Matched by name rather than pointId, since a hand-authored
+// conditional has no reason to know a numeric point ID.
+function getUnlockedTraceNames(character, skillTrees) {
+  const names = new Set();
+  (character?.skillTreeList || []).forEach((point) => {
+    const name = skillTrees[point.pointId]?.name;
+    if (name) names.add(name);
+  });
+  return names;
+}
+
+// A hand-authored conditional whose sourceAbilityName is prefixed
+// "Trace: <name>" (convention, not enforced by any schema) describes an
+// optional, allocatable trace node rather than a character's inherent
+// Basic/Skill/Ult/Talent — those are never gated, since every character
+// always has their own kit abilities regardless of trace investment.
+// Gating happens once here rather than per-conditional-type, so it
+// applies uniformly to STAT_OVERFLOW_SPLIT, ELATION_PERCENT_*_THRESHOLD,
+// or any ordinary DMG_PERCENT/CRIT_RATE/etc. conditional sourced from a
+// trace, without each needing its own unlock check.
+function conditionalTraceIsUnlocked(conditional, unlockedTraceNames) {
+  const prefix = 'Trace: ';
+  if (!conditional.sourceAbilityName?.startsWith(prefix)) return true;
+  return unlockedTraceNames.has(conditional.sourceAbilityName.slice(prefix.length));
+}
+
 function getMainStatOptions(relicMainAffixes, type) {
   const props = new Set();
   Object.entries(relicMainAffixes).forEach(([id, group]) => {
@@ -318,6 +347,24 @@ function getSkillDescAtActualLevel(character, skill, skillTrees) {
   const level = getActualSkillLevel(character, skill.id, skillTrees) || skill.max_level || skill.params.length;
   const clampedIndex = Math.min(Math.max(level, 1), skill.params.length) - 1;
   return formatLightConeDesc(skill.desc, skill.params[clampedIndex]) || skill.desc || '';
+}
+
+// Hand-authored abilities normally carry one fixed baseMultiplierPercent —
+// whatever level the author's own account happened to have when they
+// transcribed it from the real tooltip. An ability can opt into being
+// level-aware instead by providing baseMultiplierPercentByLevel (an array,
+// index 0 = level 1), in which case this picks the entry matching the
+// account's actual current level for that ability (already resolved via
+// getActualSkillLevel by the caller) rather than always using whatever
+// level was captured at authoring time. Falls back to the fixed value for
+// any ability that hasn't been migrated to the per-level array yet.
+function resolveAuthoredMultiplierPercent(abilityData, level) {
+  const byLevel = abilityData?.baseMultiplierPercentByLevel;
+  if (Array.isArray(byLevel) && byLevel.length > 0) {
+    const index = Math.min(Math.max(level || 1, 1), byLevel.length) - 1;
+    return byLevel[index];
+  }
+  return abilityData?.baseMultiplierPercent;
 }
 
 // The trigger cap itself (Sparxie: "up to 20 time(s)") isn't stated in the
@@ -1045,6 +1092,7 @@ function computeScenarioTotalDamage(stats, scenario) {
   // real-kit-text parsing machinery (hit indices, multi-hit stacking,
   // breath-linked groups, escalating multipliers) that doesn't apply here.
   if (isAuthored) {
+    const unlockedTraceNames = getUnlockedTraceNames(activeCharacter, skillTrees);
     const matchedAll = [
       ...aiConditionals.filter((c) =>
         conditionalAppliesToSkill(c, null, calcAuthoredAbilityName, calcAuthoredAbilityType)
@@ -1052,7 +1100,9 @@ function computeScenarioTotalDamage(stats, scenario) {
       ...manualConditionals.filter((c) =>
         conditionalAppliesToSkill(c, null, calcAuthoredAbilityName, calcAuthoredAbilityType)
       ),
-    ].filter((c) => !c.restrictedToDamageType || c.restrictedToDamageType === calcDamageType);
+    ]
+      .filter((c) => !c.restrictedToDamageType || c.restrictedToDamageType === calcDamageType)
+      .filter((c) => conditionalTraceIsUnlocked(c, unlockedTraceNames));
 
     if (typeof window !== 'undefined' && window.__debugAuthoredConditionalMatching) {
       console.log('[AUTHORED ROW]', {
@@ -2058,13 +2108,42 @@ export default function ProfilePage() {
             // don't need a skillId match at all, just the ability data the
             // character file already carries directly.
             if (entry.isAttachedTrigger) {
-              const parentAbilityData = Object.values(result.abilities).find((a) =>
+              const parentEntry = Object.entries(result.abilities).find(([, a]) =>
                 a.attachedTriggers?.some((t) => t.name === entry.abilityName)
               );
+              const [parentName, parentAbilityData] = parentEntry || [];
               const triggerData = parentAbilityData?.attachedTriggers?.find(
                 (t) => t.name === entry.abilityName
               );
               if (!triggerData) return null;
+
+              // A trigger like Top Loot Box has no trace node of its own
+              // by default, so it normally follows whatever ability
+              // declares it in attachedTriggers. But some triggers ARE
+              // independently level-tracked under a different ability
+              // entirely (Silver Wolf's Top Loot Box shares its level with
+              // "Elation Skill: Honkai-DMG Demo", not with whichever
+              // ability spawned this particular instance of it) — the
+              // trigger can declare that explicitly via its own
+              // skillMatchName, same field/pattern already used for
+              // abilities above, rather than always inheriting the
+              // parent's level.
+              const triggerMatchName = triggerData.skillMatchName;
+              const parentMatchName = parentAbilityData?.skillMatchName || parentName;
+              const effectiveMatchName = triggerMatchName || parentMatchName;
+              const triggerSkillId =
+                effectiveMatchName &&
+                Object.keys(characterSkills).find((id) => {
+                  const s = characterSkills[id];
+                  if (!s) return false;
+                  const displayName = s.type_text ? `${s.type_text}: ${s.name}` : s.name;
+                  return displayName === effectiveMatchName;
+                });
+              const triggerLevel =
+                (triggerSkillId && getActualSkillLevel(activeChar, triggerSkillId, skillTrees)) ||
+                characterSkills[triggerSkillId]?.max_level ||
+                1;
+
               return {
                 id: makeRotationRowId(),
                 skillId: null,
@@ -2087,7 +2166,7 @@ export default function ProfilePage() {
                 damageSourceName: null,
                 dealsNoDirectDamage: false,
                 selfBuffCastNumber: 1,
-                authoredMultiplierPercent: triggerData.baseMultiplierPercent,
+                authoredMultiplierPercent: resolveAuthoredMultiplierPercent(triggerData, triggerLevel),
                 // Defaults to ULT only for backward compatibility with
                 // existing attached triggers that don't declare their own
                 // abilityType (e.g. Silver Wolf's Top Loot Box, which
@@ -2150,7 +2229,7 @@ export default function ProfilePage() {
               damageSourceName: abilityData?.damageSourceName || null,
               dealsNoDirectDamage: !!abilityData?.dealsNoDirectDamage,
               selfBuffCastNumber: 1,
-              authoredMultiplierPercent: abilityData?.baseMultiplierPercent,
+              authoredMultiplierPercent: resolveAuthoredMultiplierPercent(abilityData, level),
               authoredAbilityType: abilityData?.abilityType || null,
               averagedAcrossEnemies: !!abilityData?.averagedAcrossEnemies,
               hitsAllEnemies: !!abilityData?.hitsAllEnemies,
@@ -2752,7 +2831,9 @@ export default function ProfilePage() {
                     .map((s) => s.name)
                 );
 
-                const allConditionals = [...aiConditionals, ...manualConditionals];
+                const allConditionals = [...aiConditionals, ...manualConditionals].filter((c) =>
+                  conditionalTraceIsUnlocked(c, getUnlockedTraceNames(activeCharacter, skillTrees))
+                );
 
                 // Same idea as multiHitAbilityNames above, but for
                 // self-buffing conditionals (an ability whose repeated use

@@ -32,7 +32,9 @@ const abilities = {
     damageType: 'STANDARD',
     scalingStat: 'ATK',
     damageSourceName: null,
-    baseMultiplierPercent: 140,
+    // Was a fixed 140 (the level-10 value) — now level-aware. Level 6 (max
+    // at E0) confirmed as 100% against Alex's own real account tooltip.
+    baseMultiplierPercentByLevel: [50, 60, 70, 80, 90, 100, 110, 120, 130, 140],
   },
 
   'Skill: Trigger Happy': {
@@ -40,7 +42,9 @@ const abilities = {
     damageType: 'STANDARD',
     scalingStat: 'ATK',
     damageSourceName: null,
-    baseMultiplierPercent: 200,
+    // Was a fixed 200 (the level-15 value) — now level-aware. Level 10
+    // (max at E0) is 160%.
+    baseMultiplierPercentByLevel: [80, 88, 96, 104, 112, 120, 130, 140, 150, 160, 168, 176, 184, 192, 200],
   },
 
   // Ultimate itself deals no direct damage — it enters "Godmode Player"
@@ -54,19 +58,22 @@ const abilities = {
     dealsNoDirectDamage: true,
   },
 
-  // 100 bounce hits totaling 336% ATK as STANDARD damage, split evenly.
-  // Separately (not part of the 336%), every so often the bouncing pauses
-  // and triggers "Top Loot Box" — up to 3 times per use. The three
-  // differently-named "finisher" abilities (Funky Munch Bean / Kaboom
-  // Eggsplosion / Big Flipping Sword) are cosmetic labels for a Top Loot
-  // Box trigger and are NOT separate damage sources — their DMG line is
-  // identical word-for-word in the real kit text.
+  // 100 bounce hits totaling (at max level) 336% ATK as STANDARD damage,
+  // split evenly. Separately (not part of that total), every so often the
+  // bouncing pauses and triggers "Top Loot Box" — up to 3 times per use.
+  // The three differently-named "finisher" abilities (Funky Munch Bean /
+  // Kaboom Eggsplosion / Big Flipping Sword) are cosmetic labels for a Top
+  // Loot Box trigger and are NOT separate damage sources — their DMG line
+  // is identical word-for-word in the real kit text.
   'Basic ATK: Bonus Stage: αWolf Instant': {
     abilityType: 'BASIC',
     damageType: 'STANDARD',
     scalingStat: 'ATK',
     damageSourceName: null,
-    baseMultiplierPercent: 336,
+    // Was a fixed 336 (the level-10 value) — now level-aware, same level
+    // track as One Punch! (both are Basic ATK, governed by the same
+    // trace node). Level 6 (max at E0) is 240%.
+    baseMultiplierPercentByLevel: [120, 144, 168, 192, 216, 240, 264, 288, 312, 336],
     bounceHitCount: 100,
     isEnhancedOnly: true,
     replacesAbilityName: 'Basic ATK: One Punch!',
@@ -74,7 +81,18 @@ const abilities = {
       {
         name: 'Top Loot Box',
         damageType: 'ELATION',
-        baseMultiplierPercent: 113,
+        // Was a fixed 113 (the level-15 value) — now level-aware. Top Loot
+        // Box has its OWN independent level, tracked by the "Elation
+        // Skill" trace node — NOT by Basic ATK, even though this
+        // particular trigger instance is spawned from a Basic ATK
+        // ability. skillMatchName points level resolution at the real
+        // ability that actually owns this level track ("Elation Skill:
+        // Honkai-DMG Demo") instead of inheriting Bonus Stage's own
+        // (unrelated, lower) Basic ATK level. Level 10 (max at E0) is 90%.
+        skillMatchName: 'Elation Skill: Honkai-DMG Demo',
+        baseMultiplierPercentByLevel: [
+          45, 49.5, 54, 58.5, 63, 67.5, 73.12, 78.75, 84.38, 90, 94.5, 99, 103.5, 108, 112.5,
+        ],
         averagedAcrossEnemies: true,
         maxTriggersPerUse: 3,
       },
@@ -88,7 +106,10 @@ const abilities = {
     damageType: 'ELATION',
     scalingStat: null,
     damageSourceName: 'Top Loot Box',
-    baseMultiplierPercent: 113,
+    // Was a fixed 113 (the level-15 value) — now level-aware. Level 10
+    // (max at E0) is 90%. Same array as the Top Loot Box trigger above,
+    // since this ability IS Top Loot Box's own real level track.
+    baseMultiplierPercentByLevel: [45, 49.5, 54, 58.5, 63, 67.5, 73.12, 78.75, 84.38, 90, 94.5, 99, 103.5, 108, 112.5],
     hitCount: 6,
     isEnhancedOnly: true,
     resetsTopLootBoxTrigger: true,
