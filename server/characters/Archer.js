@@ -3,8 +3,20 @@
 // conditionals-cache.json entries for him (both "Caladbolg II: Fake Spiral
 // Sword" and "Guardian" match verbatim, percentages included) — higher
 // confidence than Yaoguang's sources, which contradicted the real kit text
-// on at least one value. Multiplier percentages come from the real in-game
-// text provided directly, not from these sources.
+// on at least one value.
+//
+// Multiplier percentages are level-aware (baseMultiplierPercentByLevel),
+// sourced directly from StarRailRes's character_skills.json params arrays
+// rather than a single fixed number — the previous version of this file
+// used fixed values that all turned out to match level 15 (or level 9,
+// Basic ATK's absolute max) rather than the account's actual E0-achievable
+// level (Basic ATK 6, Skill/Ultimate/Talent 10). Same underlying issue
+// found and fixed on Silver Wolf LV.999; this is the second character in a
+// row where every value matched max level instead of live level, so the
+// same recheck is worth doing on any other previously-authored character.
+//
+// Technique's real name is now confirmed as "Clairvoyance" (previously
+// authored as "[NAME UNCONFIRMED]").
 
 const characterName = 'Archer';
 
@@ -14,21 +26,25 @@ const abilities = {
     damageType: 'STANDARD',
     scalingStat: 'ATK',
     damageSourceName: null,
-    baseMultiplierPercent: 130,
+    // 9 levels total (this ability's own absolute max, not the usual 10) —
+    // level 6 (max at E0) is 100%.
+    baseMultiplierPercentByLevel: [50, 60, 70, 80, 90, 100, 110, 120, 130],
   },
 
-  // Base 450% — the +120%/+240% Circuit Connection stacking bonus is NOT
-  // baked in here. It's already a real conditional in conditionals-cache.json
-  // ("Skill Damage Increase in Circuit Connection", DMG_PERCENT, SKILL-
-  // scoped), reused below, so it composes naturally through the normal
-  // aiDmgPercent path instead of needing to be hardcoded into the base
-  // multiplier for each stack level.
+  // Base multiplier only — the +100%(Lv15)/scales-by-level Circuit
+  // Connection stacking bonus is NOT baked in here. It's a separate
+  // conditional below (DMG_PERCENT, SKILL-scoped) so it composes through
+  // the normal aiDmgPercent path instead of needing per-stack-per-level
+  // multipliers hardcoded into the base value.
   'Skill: Caladbolg II: Fake Spiral Sword': {
     abilityType: 'SKILL',
     damageType: 'STANDARD',
     scalingStat: 'ATK',
     damageSourceName: null,
-    baseMultiplierPercent: 450,
+    // Level 10 (max at E0) is 360%.
+    baseMultiplierPercentByLevel: [
+      180, 198, 216, 234, 252, 270, 292.5, 315, 337.5, 360, 378, 396, 414, 432, 450,
+    ],
   },
 
   'Ultimate: Unlimited Blade Works': {
@@ -36,7 +52,10 @@ const abilities = {
     damageType: 'STANDARD',
     scalingStat: 'ATK',
     damageSourceName: null,
-    baseMultiplierPercent: 1200,
+    // Level 10 (max at E0) is 1000%.
+    baseMultiplierPercentByLevel: [
+      600, 640, 680, 720, 760, 800, 850, 900, 950, 1000, 1040, 1080, 1120, 1160, 1200,
+    ],
     // Also grants 2 Charge (max 4) — not modeled, no damage/stat effect.
   },
 
@@ -52,27 +71,30 @@ const abilities = {
     damageType: 'STANDARD',
     scalingStat: 'ATK',
     damageSourceName: null,
-    baseMultiplierPercent: 250,
+    // Level 10 (max at E0) is 200%.
+    baseMultiplierPercentByLevel: [
+      100, 110, 120, 130, 140, 150, 162.5, 175, 187.5, 200, 210, 220, 230, 240, 250,
+    ],
   },
 
-  // Real numbers confirmed (200% Quantum AoE, on combat entry, +1 Charge),
-  // but the actual ability NAME is unconfirmed — couldn't find it in any
-  // source. Left out of the default rotation below (one-time, pre-combat,
-  // not part of steady-state DPS) but declared here for completeness in
-  // case you want to add it manually later once the name is confirmed.
-  'Technique: [NAME UNCONFIRMED]': {
+  // Name confirmed as "Clairvoyance" — single-tier (Techniques aren't
+  // leveled via materials or traces), so no per-level array needed.
+  'Technique: Clairvoyance': {
     abilityType: 'BASIC',
     damageType: 'STANDARD',
     scalingStat: 'ATK',
     damageSourceName: null,
     baseMultiplierPercent: 200,
     hitsAllEnemies: true,
+    // Also grants 1 Charge on entering combat — not modeled, no
+    // damage/stat effect.
   },
 };
 
-// Reused directly from conditionals-cache.json — both entries independently
-// cross-validated against real kit/trace text just now (exact name and
-// percentage matches), so treated as trustworthy rather than re-derived.
+// Reused directly from conditionals-cache.json, cross-validated against
+// real kit/trace text (exact name match on both), but their percentages
+// had the same max-level-not-live-level issue as the abilities above —
+// corrected to the E0/level-10 value below.
 const conditionals = [
   {
     name: 'Skill Damage Increase in Circuit Connection',
@@ -81,7 +103,12 @@ const conditionals = [
     sourceAbilityName: 'Caladbolg II: Fake Spiral Sword',
     statType: 'DMG_PERCENT',
     trigger: 'while in Circuit Connection state, each use of Skill grants a stack increasing Skill damage',
-    valuesByStack: [120, 240],
+    // Was [120, 240] (the level-15 value) — level 10 (max at E0) is
+    // [100, 200]. NOT level-aware yet (this conditional type doesn't have
+    // a per-level array mechanism the way abilities' baseMultiplierPercent
+    // now does) — if Skill's level ever changes, this needs updating by
+    // hand until that gets built out.
+    valuesByStack: [100, 200],
     maxStacks: 2,
     overflow: null,
     suspicious: false,
@@ -91,7 +118,12 @@ const conditionals = [
     name: 'Guardian',
     appliesToAbility: 'ALL',
     restrictedToAbilityName: null,
-    sourceAbilityName: 'Guardian',
+    // "Trace: " prefix gates this on whether the Guardian trace node is
+    // actually unlocked on the account (via character.skillTreeList),
+    // same convention introduced for Silver Wolf's False Ending Speedrun
+    // — this wasn't gated before, meaning it would have applied even if
+    // unallocated.
+    sourceAbilityName: 'Trace: Guardian',
     statType: 'CRIT_DMG',
     trigger: 'After allies gain a Skill Point, if total Skill Points are 4 or more',
     valuesByStack: [120],
