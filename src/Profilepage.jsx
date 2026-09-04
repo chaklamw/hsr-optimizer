@@ -424,6 +424,19 @@ function resolveAuthoredMultiplierPercent(abilityData, level) {
   return abilityData?.baseMultiplierPercent;
 }
 
+// Same level-aware/fixed-value fallback pattern as
+// resolveAuthoredMultiplierPercent above, for a Blast ability's separate
+// adjacent-target multiplier (e.g. Castorice's Silence, Wraithfly's
+// Caress) instead of its main-target one.
+function resolveAuthoredBlastAdjacentMultiplierPercent(abilityData, level) {
+  const byLevel = abilityData?.blastAdjacentMultiplierPercentByLevel;
+  if (Array.isArray(byLevel) && byLevel.length > 0) {
+    const index = Math.min(Math.max(level || 1, 1), byLevel.length) - 1;
+    return byLevel[index];
+  }
+  return abilityData?.blastAdjacentMultiplierPercent ?? null;
+}
+
 // The trigger cap itself (Sparxie: "up to 20 time(s)") isn't stated in the
 // same ability's text as the DMG-multiplier bonus — it's in whichever
 // ability actually triggers the named source ability repeatedly (for
@@ -1093,6 +1106,19 @@ function computeScenarioTotalDamage(stats, scenario) {
     // other row's own trigger-count input instead of requiring a
     // redundant, disconnected manual dropdown.
     calcSourceAbilityTriggerCounts,
+    // Shared across every row, keyed by each row's REAL ability identity
+    // (skillMatchName if the kit declared one, else its stripped label) —
+    // summed countPerRotation across every row sharing that identity, even
+    // when they're authored as multiple distinctly-labeled tiers (e.g.
+    // Castorice's 3 Breath Scorches the Shadow rows). Distinct from
+    // calcSourceAbilityTriggerCounts above: that one keys off stackingTriggers
+    // (a manually-set resource count, e.g. Sparxie's Engagement Farming),
+    // this one is a plain cast-count tally, for a conditional whose actual
+    // trigger ability isn't the same string as its sourceAbilityName (e.g.
+    // a trace-gated conditional, where sourceAbilityName has to be the
+    // trace's own name for unlock-checking, not the ability that triggers
+    // its stacks).
+    calcAbilityCastCounts,
     aiConditionals,
     manualConditionals,
     aiConditionalStacks,
@@ -1176,20 +1202,30 @@ function computeScenarioTotalDamage(stats, scenario) {
       });
     }
 
-    // Resolves a conditional's effective stack count: if its
-    // sourceAbilityName matches a rotation row that's actually present
-    // (calcSourceAbilityTriggerCounts), that row's own trigger-count input
-    // wins — it's the row-driven, self-explaining count the person
-    // actually set. Falls back to the manual global dropdown
-    // (aiConditionalStacks) only when the source ability isn't its own
-    // row in the current rotation, preserving the old behavior for that
-    // case rather than silently zeroing the conditional out.
+    // Resolves a conditional's effective stack count, checking sources in
+    // order: (1) sourceAbilityName matches a rotation row's own
+    // stackingTriggers input (calcSourceAbilityTriggerCounts) — the
+    // row-driven, self-explaining count the person actually set; (2)
+    // stackSourceAbilityName matches a DIFFERENT ability's total cast
+    // count across the rotation (calcAbilityCastCounts) — for a
+    // conditional whose sourceAbilityName has to be something else (e.g. a
+    // trace's own name, for unlock-gating) while its stacks are actually
+    // driven by a different ability being cast repeatedly; (3) falls back
+    // to the manual global dropdown (aiConditionalStacks) only when
+    // neither row-driven source applies, preserving old behavior rather
+    // than silently zeroing the conditional out.
     const resolveConditionalStacks = (c) => {
       const rowDrivenCount = c.sourceAbilityName
         ? calcSourceAbilityTriggerCounts?.[c.sourceAbilityName]
         : undefined;
       if (rowDrivenCount != null) {
         return c.maxStacks ? Math.min(c.maxStacks, rowDrivenCount) : rowDrivenCount;
+      }
+      const abilityCastCount = c.stackSourceAbilityName
+        ? calcAbilityCastCounts?.[c.stackSourceAbilityName]
+        : undefined;
+      if (abilityCastCount != null) {
+        return c.maxStacks ? Math.min(c.maxStacks, abilityCastCount) : abilityCastCount;
       }
       return aiConditionalStacks[c.name] || 0;
     };
@@ -1668,6 +1704,20 @@ function computeRotationTotalDamage(stats, rows, globalScenario) {
     }
   });
 
+  // Built the same way, but summing countPerRotation grouped by each row's
+  // REAL ability identity (abilityMatchName, falling back to its own
+  // stripped label) rather than reading a manually-set stackingTriggers
+  // value off one specific row. Lets a conditional count total casts of an
+  // ability that's authored as multiple distinctly-labeled rotation rows
+  // (e.g. Castorice's 3 Breath Scorches the Shadow tiers all summing to
+  // one cast count for "Where the West Wind Dwells").
+  const abilityCastCounts = {};
+  rows.forEach((r) => {
+    const key = r.abilityMatchName || stripAuthoredAbilityTypePrefix(r.label);
+    if (!key) return;
+    abilityCastCounts[key] = (abilityCastCounts[key] || 0) + (r.countPerRotation || 0);
+  });
+
   const perRow = rows.map((row) => {
     const rowScenario = {
       ...globalScenario,
@@ -1684,6 +1734,7 @@ function computeRotationTotalDamage(stats, rows, globalScenario) {
       // mirror the same number.
       calcStackingTriggers: row.stackingTriggers ?? 0,
       calcSourceAbilityTriggerCounts: sourceAbilityTriggerCounts,
+      calcAbilityCastCounts: abilityCastCounts,
       // Per-row like calcStackingTriggers above — two rows using the same
       // self-buffing ability (e.g. Archer's Skill cast twice in one turn)
       // represent different points in the stacking sequence, not the same
@@ -2204,6 +2255,7 @@ export default function ProfilePage() {
 
               return {
                 id: makeRotationRowId(),
+                abilityMatchName: effectiveMatchName,
                 skillId: null,
                 skillLevel: null,
                 paramIndex: 0,
@@ -2237,7 +2289,7 @@ export default function ProfilePage() {
                 authoredAbilityType: triggerData.abilityType || 'ULT',
                 averagedAcrossEnemies: !!triggerData.averagedAcrossEnemies,
                 hitsAllEnemies: !!triggerData.hitsAllEnemies,
-                blastAdjacentMultiplierPercent: triggerData.blastAdjacentMultiplierPercent ?? null,
+                blastAdjacentMultiplierPercent: resolveAuthoredBlastAdjacentMultiplierPercent(triggerData, triggerLevel),
                 authoredMultiplierPerElationPercent: triggerData.multiplierPerElationPercent ?? 0,
                 locked: true,
               };
@@ -2271,6 +2323,7 @@ export default function ProfilePage() {
 
             return {
               id: makeRotationRowId(),
+              abilityMatchName: matchName,
               skillId: skillId || null,
               skillLevel: level,
               paramIndex: 0,
@@ -2291,7 +2344,7 @@ export default function ProfilePage() {
               authoredAbilityType: abilityData?.abilityType || null,
               averagedAcrossEnemies: !!abilityData?.averagedAcrossEnemies,
               hitsAllEnemies: !!abilityData?.hitsAllEnemies,
-              blastAdjacentMultiplierPercent: abilityData?.blastAdjacentMultiplierPercent ?? null,
+              blastAdjacentMultiplierPercent: resolveAuthoredBlastAdjacentMultiplierPercent(abilityData, level),
               authoredMultiplierPerElationPercent: abilityData?.multiplierPerElationPercent ?? 0,
               locked: true,
               missingSkillMatch: !skillId,
