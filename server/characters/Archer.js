@@ -31,19 +31,57 @@ const abilities = {
     baseMultiplierPercentByLevel: [50, 60, 70, 80, 90, 100, 110, 120, 130],
   },
 
-  // Base multiplier only — the +100%(Lv15)/scales-by-level Circuit
-  // Connection stacking bonus is NOT baked in here. It's a separate
-  // conditional below (DMG_PERCENT, SKILL-scoped) so it composes through
-  // the normal aiDmgPercent path instead of needing per-stack-per-level
-  // multipliers hardcoded into the base value.
+  // Authored as 3 separate cast tiers (0/1/2 Circuit Connection stacks)
+  // rather than one entry + a generic DMG_PERCENT stacking conditional —
+  // same pattern already used for Castorice's escalating-multiplier
+  // ability. The generic conditional-stacking path resolves a self-
+  // referential conditional's stack count from the ability's TOTAL trigger
+  // count for the whole rotation (rowDrivenCount in resolveConditionalStacks),
+  // capped at maxStacks — meaning every one of the 5 Skill casts in a
+  // rotation would get treated as already at the 2-stack cap, including
+  // the very first cast, which should have 0. Baking each tier's stacking
+  // bonus directly into its own baseMultiplierPercentByLevel sidesteps
+  // that entirely: each tier is its own row with its own count, so 1 cast
+  // at 0 stacks + 1 at 1 stack + 3 at the capped 2 stacks models the real
+  // 5-cast escalation instead of guessing an aggregate.
   'Skill: Caladbolg II: Fake Spiral Sword': {
     abilityType: 'SKILL',
     damageType: 'STANDARD',
     scalingStat: 'ATK',
     damageSourceName: null,
-    // Level 10 (max at E0) is 360%.
+    // 0 stacks (first cast in Circuit Connection). Level 10 (max at E0) is
+    // 360% — same as the ability's own base value, unmodified.
     baseMultiplierPercentByLevel: [
       180, 198, 216, 234, 252, 270, 292.5, 315, 337.5, 360, 378, 396, 414, 432, 450,
+    ],
+  },
+
+  'Skill: Caladbolg II: Fake Spiral Sword (1 Stack)': {
+    abilityType: 'SKILL',
+    damageType: 'STANDARD',
+    scalingStat: 'ATK',
+    damageSourceName: null,
+    // Points level resolution at the real ability, since this dictionary
+    // key doesn't match characterSkills' own name.
+    skillMatchName: 'Skill: Caladbolg II: Fake Spiral Sword',
+    // Base multiplier x (1 + per-stack bonus), both level-dependent. Level
+    // 10 (max at E0) is 720% (360% base x 2).
+    baseMultiplierPercentByLevel: [
+      288, 324.72, 362.88, 402.48, 443.52, 486, 541.125, 598.5, 658.125, 720, 771.12, 823.68, 877.68, 933.12, 990,
+    ],
+  },
+
+  'Skill: Caladbolg II: Fake Spiral Sword (2 Stacks)': {
+    abilityType: 'SKILL',
+    damageType: 'STANDARD',
+    scalingStat: 'ATK',
+    damageSourceName: null,
+    skillMatchName: 'Skill: Caladbolg II: Fake Spiral Sword',
+    // Base multiplier x (1 + 2x per-stack bonus), capped here since Circuit
+    // Connection stacks no higher than 2. Level 10 (max at E0) is 1080%
+    // (360% base x 3).
+    baseMultiplierPercentByLevel: [
+      396, 451.44, 509.76, 570.96, 635.04, 702, 789.75, 882, 978.75, 1080, 1164.24, 1251.36, 1341.36, 1434.24, 1530,
     ],
   },
 
@@ -92,28 +130,12 @@ const abilities = {
 };
 
 // Reused directly from conditionals-cache.json, cross-validated against
-// real kit/trace text (exact name match on both), but their percentages
-// had the same max-level-not-live-level issue as the abilities above —
-// corrected to the E0/level-10 value below.
+// real kit/trace text (exact name match).
+//
+// The Circuit Connection stacking conditional that used to live here is
+// gone — it's now baked directly into the 3 tiered Skill entries above
+// instead (see the comment there for why).
 const conditionals = [
-  {
-    name: 'Skill Damage Increase in Circuit Connection',
-    appliesToAbility: 'SKILL',
-    restrictedToAbilityName: null,
-    sourceAbilityName: 'Caladbolg II: Fake Spiral Sword',
-    statType: 'DMG_PERCENT',
-    trigger: 'while in Circuit Connection state, each use of Skill grants a stack increasing Skill damage',
-    // Was [120, 240] (the level-15 value) — level 10 (max at E0) is
-    // [100, 200]. NOT level-aware yet (this conditional type doesn't have
-    // a per-level array mechanism the way abilities' baseMultiplierPercent
-    // now does) — if Skill's level ever changes, this needs updating by
-    // hand until that gets built out.
-    valuesByStack: [100, 200],
-    maxStacks: 2,
-    overflow: null,
-    suspicious: false,
-    suspiciousNote: '',
-  },
   {
     name: 'Guardian',
     appliesToAbility: 'ALL',
@@ -138,8 +160,15 @@ const conditionals = [
 // FOR REVIEW, not verified against real play. Talent's trigger count in
 // particular is a guess; it genuinely depends on ally rotation speed,
 // which this calculator has no visibility into from Archer's own page.
+//
+// The 5 Circuit Connection Skill casts are split across the 3 stack tiers
+// (1 at 0 stacks, 1 at 1 stack, 3 at the capped 2 stacks) to model the
+// real escalation instead of one row with a flat count — see the tiered
+// ability entries above.
 const rotation = [
-  { abilityName: 'Skill: Caladbolg II: Fake Spiral Sword', countPerRotation: 5 },
+  { abilityName: 'Skill: Caladbolg II: Fake Spiral Sword', countPerRotation: 1 },
+  { abilityName: 'Skill: Caladbolg II: Fake Spiral Sword (1 Stack)', countPerRotation: 1 },
+  { abilityName: 'Skill: Caladbolg II: Fake Spiral Sword (2 Stacks)', countPerRotation: 3 },
   { abilityName: 'Basic ATK: Kanshou and Bakuya', countPerRotation: 1 },
   { abilityName: 'Ultimate: Unlimited Blade Works', countPerRotation: 1 },
   { abilityName: "Talent: Mind's Eye (True)", countPerRotation: 2 },

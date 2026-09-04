@@ -155,6 +155,63 @@ function conditionalTraceIsUnlocked(conditional, unlockedTraceNames) {
   return unlockedTraceNames.has(conditional.sourceAbilityName.slice(prefix.length));
 }
 
+// Resolves the live level backing a conditional, same "skillMatchName ||
+// sourceAbilityName" convention already used for abilities and attached
+// triggers. Two cases: a "Trace: <name>" source reads the level straight
+// off character.skillTreeList (traces aren't in characterSkills at all),
+// while an ordinary ability name resolves through characterSkills +
+// getActualSkillLevel exactly like a normal rotation row's own ability.
+function getConditionalLiveLevel(conditional, character, skillTrees, characterSkills) {
+  const matchName = conditional.skillMatchName || conditional.sourceAbilityName;
+  if (!matchName) return null;
+
+  const tracePrefix = 'Trace: ';
+  if (matchName.startsWith(tracePrefix)) {
+    const traceName = matchName.slice(tracePrefix.length);
+    const tracePointId = Object.keys(skillTrees).find((pid) => skillTrees[pid]?.name === traceName);
+    const tracePoint = (character?.skillTreeList || []).find(
+      (p) => String(p.pointId) === String(tracePointId)
+    );
+    return tracePoint?.level ?? null;
+  }
+
+  const skillId = Object.keys(characterSkills).find((id) => {
+    const s = characterSkills[id];
+    if (!s) return false;
+    const displayName = s.type_text ? `${s.type_text}: ${s.name}` : s.name;
+    return displayName === matchName;
+  });
+  return skillId ? getActualSkillLevel(character, skillId, skillTrees) : null;
+}
+
+// A conditional can opt into being level-aware by providing
+// valuesByStackPerLevel (an array of per-stack arrays, index 0 = level 1)
+// instead of a single fixed valuesByStack — same idea as abilities'
+// baseMultiplierPercentByLevel, just one dimension deeper since a
+// conditional's value already varies by stack count. Anything without
+// valuesByStackPerLevel keeps using its fixed valuesByStack unchanged.
+function resolveConditionalValuesByStack(conditional, character, skillTrees, characterSkills) {
+  const byLevel = conditional.valuesByStackPerLevel;
+  if (!Array.isArray(byLevel) || byLevel.length === 0) {
+    return conditional.valuesByStack;
+  }
+  const level = getConditionalLiveLevel(conditional, character, skillTrees, characterSkills);
+  const index = Math.min(Math.max(level || byLevel.length, 1), byLevel.length) - 1;
+  return byLevel[index] || conditional.valuesByStack || [];
+}
+
+// Normalizes a conditional's valuesByStack to the live-level-resolved row
+// once, so every downstream consumer (damage calc's sumConditionalStat,
+// the tooltip, the live preview list) can keep reading c.valuesByStack
+// exactly as before without needing to know about the per-level array.
+function withResolvedValuesByStack(conditional, character, skillTrees, characterSkills) {
+  if (!Array.isArray(conditional.valuesByStackPerLevel)) return conditional;
+  return {
+    ...conditional,
+    valuesByStack: resolveConditionalValuesByStack(conditional, character, skillTrees, characterSkills),
+  };
+}
+
 function getMainStatOptions(relicMainAffixes, type) {
   const props = new Set();
   Object.entries(relicMainAffixes).forEach(([id, group]) => {
@@ -1102,7 +1159,8 @@ function computeScenarioTotalDamage(stats, scenario) {
       ),
     ]
       .filter((c) => !c.restrictedToDamageType || c.restrictedToDamageType === calcDamageType)
-      .filter((c) => conditionalTraceIsUnlocked(c, unlockedTraceNames));
+      .filter((c) => conditionalTraceIsUnlocked(c, unlockedTraceNames))
+      .map((c) => withResolvedValuesByStack(c, activeCharacter, skillTrees, characterSkills));
 
     if (typeof window !== 'undefined' && window.__debugAuthoredConditionalMatching) {
       console.log('[AUTHORED ROW]', {
@@ -2831,7 +2889,13 @@ export default function ProfilePage() {
                     .map((s) => s.name)
                 );
 
-                const allConditionals = [...aiConditionals, ...manualConditionals].filter((c) =>
+                const resolvedAiConditionals = aiConditionals.map((c) =>
+                  withResolvedValuesByStack(c, activeCharacter, skillTrees, characterSkills)
+                );
+                const resolvedManualConditionals = manualConditionals.map((c) =>
+                  withResolvedValuesByStack(c, activeCharacter, skillTrees, characterSkills)
+                );
+                const allConditionals = [...resolvedAiConditionals, ...resolvedManualConditionals].filter((c) =>
                   conditionalTraceIsUnlocked(c, getUnlockedTraceNames(activeCharacter, skillTrees))
                 );
 
@@ -3269,7 +3333,7 @@ export default function ProfilePage() {
                         </div>
                       )}
 
-                      {aiConditionals
+                      {resolvedAiConditionals
                         .filter(
                           (c) =>
                             c.statType !== 'STAT_OVERFLOW_SPLIT' &&
@@ -3312,7 +3376,7 @@ export default function ProfilePage() {
                           </div>
                         ))}
 
-                      {manualConditionals
+                      {resolvedManualConditionals
                         .filter(
                           (c) =>
                             c.statType !== 'STAT_OVERFLOW_SPLIT' &&
