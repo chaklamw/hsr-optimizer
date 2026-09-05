@@ -1,3 +1,16 @@
+// Hand-authored kit for Sparxie, drafted from a terminal ability dump (14
+// entries) rather than raw StarRailRes JSON. Two entries in that dump were
+// TRUNCATED mid-sentence by whatever printed them, and are flagged below
+// rather than guessed at:
+//   - Talent "Sleight of Sparx Hand": cuts off mid-description of the
+//     Ultimate's Certified Banger bonus damage ("...deals 60% Fire Elation
+//     DMG to all ene...").
+//   - Light Cone Passive "Dazzled by a Flowery World": cuts off mid-
+//     description ("...up to a max increase of 3... If 4 or more S...").
+//     This is equipment, not part of Sparxie's own kit — belongs in
+//     server/equipment/, NOT written here, same rule as every other
+//     character file. Not authored at all yet since the text is incomplete.
+//
 // The 2pc/4pc Ever-Glorious Magical Girl and 2pc Tengoku@Livestream entries
 // in the same dump were cross-checked against this app's existing
 // server/equipment/EverGloriousMagicalGirl.js and TengokuLivestream.js —
@@ -166,6 +179,15 @@ const abilities = {
     damageType: 'STANDARD',
     scalingStat: 'ATK',
     damageSourceName: null,
+    // The "(Certified Banger)" suffix is this app's own naming, not a
+    // real distinct skill in StarRailRes data — same Ultimate, just
+    // different tooltip text while the state is active. Without this,
+    // the rotation-row lookup in Profilepage.jsx tries to match the
+    // literal string "...(Certified Banger)" against characterSkills and
+    // fails, surfacing as "No matching entry found" once this ability
+    // actually gets used as a row's abilityName (via the Certified Banger
+    // toggle's auto-swap) rather than just sitting unused in this file.
+    skillMatchName: "Ultimate: Party's Wildin' and Camera's Rollin'",
     baseMultiplierPercentByLevel: [30, 32, 34, 36, 38, 40, 42.5, 45, 47.5, 50, 52, 54, 56, 58, 60],
     multiplierPerElationPercent: 0.6,
     hitsAllEnemies: true,
@@ -249,10 +271,27 @@ const abilities = {
     damageType: 'STANDARD',
     scalingStat: 'ATK',
     damageSourceName: null,
+    // Same "(Certified Banger)" naming caveat as the Ultimate variant
+    // above — not a real distinct skill, needs to match against the real
+    // "Basic ATK: Bloom! Winner Takes All" skill entry instead of its own
+    // literal (invented) name.
+    skillMatchName: 'Basic ATK: Bloom! Winner Takes All',
     baseMultiplierPercentByLevel: [50, 60, 70, 80, 90, 100, 110, 120, 130, 140],
     blastAdjacentMultiplierPercentByLevel: [25, 30, 35, 40, 45, 50, 55, 60, 65, 70],
     isEnhancedOnly: true,
-    replacesAbilityName: 'Basic ATK: Cat Got Your Flametongue?',
+    // Points at the livestream-enhanced tier ("Bloom! Winner Takes All"),
+    // NOT the original un-enhanced Basic ATK — this is a THIRD tier
+    // (plain -> livestream-enhanced -> livestream+Certified-Banger), and
+    // Certified Banger can only ever be active on top of an already-
+    // active livestream, so the chain has to point at its immediate
+    // predecessor for a generic "find my enhanced sibling" lookup (see
+    // Profilepage.jsx's buildEffectiveRotation) to actually walk from a
+    // rotation row currently sitting at the livestream tier up to this
+    // one. Previously pointed at 'Basic ATK: Cat Got Your Flametongue?'
+    // (skipping the middle tier entirely) — harmless before nothing read
+    // this field at runtime, but would have silently broken the very
+    // first automated state-swap feature built against it.
+    replacesAbilityName: 'Basic ATK: Bloom! Winner Takes All',
     attachedTriggers: [
       {
         name: 'Sleight of Sparx Hand (Certified Banger main hit)',
@@ -455,8 +494,14 @@ const conditionals = [
 ];
 
 // Best-effort rotation — FLAGGED FOR REVIEW like every other character.
-// Not yet including the Certified Banger bonus hits (Talent) since that
-// mechanic isn't authored above pending the untruncated text.
+// Deliberately does NOT list the Certified Banger ability variants or
+// their bonus-hit triggers here — Profilepage.jsx's "Using Certified
+// Banger state" checkbox now auto-swaps these rows and auto-injects
+// those triggers at runtime (see buildEffectiveRotation), driven by the
+// replacesAbilityName metadata already on the abilities above. Listing
+// them here too would just be redundant with what the toggle already
+// does, and would need to be kept in sync by hand every time the
+// enhanced-state kit data changes.
 const rotation = [
   { abilityName: "Skill: Boom! Sparxicle's Poppin'", countPerRotation: 1 },
   {

@@ -1693,6 +1693,67 @@ function computeScenarioTotalDamage(stats, scenario) {
   return instancedHitTotal != null ? baseTotalDamage + instancedHitTotal : baseTotalDamage;
 }
 
+// Swaps a character's authored rotation entries for their "enhanced
+// state" siblings (e.g. Sparxie's Certified Banger, or any future
+// character using the same isEnhancedOnly/replacesAbilityName pattern —
+// Silver Wolf's Bonus Stage and Castorice's Boneclaw already declare this
+// metadata too, so this works for them for free if a similar toggle is
+// ever wired up for those states) and auto-injects any attachedTriggers
+// the enhanced ability declares that aren't already present as their own
+// rotation entries, so a real state toggle actually changes what gets
+// calculated instead of requiring the kit's default rotation to hardcode
+// every enhanced variant + its bonus-hit rows by hand.
+//
+// Deliberately looks up siblings via replacesAbilityName rather than any
+// name-string convention (no "(Certified Banger)" suffix matching) — this
+// keeps the swap fully generic/character-agnostic, per this app's
+// existing "no character-name hardcoding in engine code" rule. Returns
+// the ORIGINAL rotation array, untouched, when usingEnhancedState is
+// false or a base entry has no enhanced sibling.
+function buildEffectiveRotation(baseRotation, abilities, usingEnhancedState) {
+  if (!usingEnhancedState || !abilities) return baseRotation;
+
+  const injectedTriggerNames = new Set(
+    baseRotation.filter((entry) => entry.isAttachedTrigger).map((entry) => entry.abilityName)
+  );
+  const effective = [];
+
+  baseRotation.forEach((entry) => {
+    if (entry.isAttachedTrigger) {
+      effective.push(entry);
+      return;
+    }
+
+    const enhancedEntry = Object.entries(abilities).find(
+      ([, a]) => a.replacesAbilityName === entry.abilityName
+    );
+
+    if (!enhancedEntry) {
+      effective.push(entry);
+      return;
+    }
+
+    const [enhancedName, enhancedData] = enhancedEntry;
+    effective.push({ ...entry, abilityName: enhancedName });
+
+    (enhancedData.attachedTriggers || []).forEach((trigger) => {
+      if (injectedTriggerNames.has(trigger.name)) return;
+      injectedTriggerNames.add(trigger.name);
+      // Mirrors the parent entry's own countPerRotation as a starting
+      // default (e.g. "1 Certified Banger Basic ATK -> 1 of each of its
+      // bonus hits") — editable afterward like any other row, not locked
+      // to this value.
+      effective.push({
+        abilityName: trigger.name,
+        countPerRotation: entry.countPerRotation,
+        isAttachedTrigger: true,
+      });
+    });
+  });
+
+  return effective;
+}
+
 // Sums damage across a full rotation: each row supplies its own ability
 // selection (skillId/skillLevel/paramIndex/activationIndex) plus its
 // classification (damageType/scalingStat/nonStatValue) from that row's own
@@ -2240,7 +2301,17 @@ export default function ProfilePage() {
         }
 
         const activeChar = characters.find((c) => c.avatarId === currentId);
-        const newRows = result.rotation
+        // Swaps in enhanced-state abilities (Sparxie's Certified Banger,
+        // or any future character using the same replacesAbilityName
+        // pattern) when the corresponding toggle is on — see
+        // buildEffectiveRotation above for why this is driven by that
+        // metadata rather than any character-specific naming.
+        const effectiveRotation = buildEffectiveRotation(
+          result.rotation,
+          result.abilities,
+          calcUsingCertifiedBanger
+        );
+        const newRows = effectiveRotation
           .map((entry) => {
             // "Top Loot Box" (and similarly-named attached triggers) aren't
             // their own row in characterSkills — they're a sub-effect of
@@ -2393,7 +2464,7 @@ export default function ProfilePage() {
     return () => {
       cancelled = true;
     };
-  }, [showDamageCalc, selectedId, data, characterSkills, skillTrees]);
+  }, [showDamageCalc, selectedId, data, characterSkills, skillTrees, calcUsingCertifiedBanger]);
 
   if (loading) {
     const percent = Math.round((loadedCount / TOTAL_REQUESTS) * 100);
