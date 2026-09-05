@@ -1,16 +1,3 @@
-// Hand-authored kit for Sparxie, drafted from a terminal ability dump (14
-// entries) rather than raw StarRailRes JSON. Two entries in that dump were
-// TRUNCATED mid-sentence by whatever printed them, and are flagged below
-// rather than guessed at:
-//   - Talent "Sleight of Sparx Hand": cuts off mid-description of the
-//     Ultimate's Certified Banger bonus damage ("...deals 60% Fire Elation
-//     DMG to all ene...").
-//   - Light Cone Passive "Dazzled by a Flowery World": cuts off mid-
-//     description ("...up to a max increase of 3... If 4 or more S...").
-//     This is equipment, not part of Sparxie's own kit — belongs in
-//     server/equipment/, NOT written here, same rule as every other
-//     character file. Not authored at all yet since the text is incomplete.
-//
 // The 2pc/4pc Ever-Glorious Magical Girl and 2pc Tengoku@Livestream entries
 // in the same dump were cross-checked against this app's existing
 // server/equipment/EverGloriousMagicalGirl.js and TengokuLivestream.js —
