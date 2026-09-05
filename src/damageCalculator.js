@@ -40,12 +40,6 @@ export function computeDamage({
     vulnerabilityMultiplier *
     brokenMultiplier
   );
-
-  // abilityType isn't used in the formula yet — it's here so callers can
-  // start tagging calculations now. Once character-specific conditional
-  // buffs are added, each buff will declare which AbilityType flag(s) it
-  // applies to, and only matching buffs will feed into dmgBonusMultiplier
-  // for a given call.
 }
 
 // Elation DMG (Path of Elation, HSR 4.0+) is calculated on a completely
