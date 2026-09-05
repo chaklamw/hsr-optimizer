@@ -1151,6 +1151,13 @@ function computeScenarioTotalDamage(stats, scenario) {
     // for any ability whose multiplier doesn't scale with Elation (i.e.
     // everyone else).
     calcAuthoredMultiplierPerElationPercent,
+    // Optional mutable object, provided by the caller (see
+    // computeRotationTotalDamage), populated as a side effect with the
+    // EXACT Elation numbers this specific row's calculation actually
+    // used — not the simplified character-level approximation shown
+    // elsewhere in the Damage Calculator modal. Undefined for every
+    // caller that doesn't pass it (a no-op in that case).
+    calcElationBreakdownOut,
   } = scenario;
 
   if (!stats) return null;
@@ -1363,7 +1370,14 @@ function computeScenarioTotalDamage(stats, scenario) {
     if (elationSelfScaledConditional) {
       const stacks = resolveConditionalStacks(elationSelfScaledConditional);
       const selfScaleRate = elationSelfScaledConditional.valuesByStack[stacks - 1] || 0;
-      effectiveElationPercent = effectiveElationPercent * (1 + selfScaleRate / 100);
+      const preSelfScalePercent = effectiveElationPercent;
+      effectiveElationPercent = preSelfScalePercent * (1 + selfScaleRate / 100);
+      if (calcElationBreakdownOut) {
+        calcElationBreakdownOut.ratePercent = selfScaleRate;
+        calcElationBreakdownOut.beforePercent = preSelfScalePercent;
+        calcElationBreakdownOut.addedPercent = effectiveElationPercent - preSelfScalePercent;
+        calcElationBreakdownOut.totalPercent = effectiveElationPercent;
+      }
     }
 
     const scalingKeyAuthored = calcScalingStat ? calcScalingStat.toLowerCase() : '';
@@ -1719,6 +1733,12 @@ function computeRotationTotalDamage(stats, rows, globalScenario) {
   });
 
   const perRow = rows.map((row) => {
+    // Populated as a side effect inside computeScenarioTotalDamage, only
+    // for rows whose calc actually hits an ELATION_PERCENT_OF_SELF
+    // conditional (e.g. Yao Guang's Zone Elation Boost) — stays an empty
+    // object for every other row/character, so `elationBreakdown` below
+    // ends up as {} rather than undefined, not populated with anything.
+    const elationBreakdownOut = {};
     const rowScenario = {
       ...globalScenario,
       calcSkillId: row.skillId,
@@ -1756,10 +1776,21 @@ function computeRotationTotalDamage(stats, rows, globalScenario) {
       // hit — no existing authored ability needs both at once yet. If one
       // ever does, this will need extending to scale the adjacent hit too.
       calcAuthoredMultiplierPerElationPercent: row.authoredMultiplierPerElationPercent ?? 0,
+      calcElationBreakdownOut: elationBreakdownOut,
     };
     const perHit = computeScenarioTotalDamage(stats, rowScenario);
     const rowTotal = perHit != null ? perHit * Math.max(0, row.countPerRotation) : null;
-    return { id: row.id, label: row.label, perHit, count: row.countPerRotation, rowTotal };
+    return {
+      id: row.id,
+      label: row.label,
+      perHit,
+      count: row.countPerRotation,
+      rowTotal,
+      // {} for every row that doesn't hit an ELATION_PERCENT_OF_SELF
+      // conditional — check elationBreakdown.totalPercent != null before
+      // rendering, not just truthiness of the object itself.
+      elationBreakdown: elationBreakdownOut,
+    };
   });
 
   const validRows = perRow.filter((r) => r.rowTotal != null);
@@ -3044,6 +3075,56 @@ export default function ProfilePage() {
                     capped: spdOverThreshold > maxExcessSpd,
                   };
                 })();
+                // ELATION_PERCENT_OF_SELF (Yao Guang's Zone Elation Boost)
+                // is NOT always-on like the ATK/SPD threshold conditionals
+                // above — it's a 3-turn buff from her Skill, so it uses
+                // the standard toggle (aiConditionalStacks, maxStacks: 1)
+                // like any other conditional; that dropdown is what
+                // actually turns it on/off for the real damage calc via
+                // resolveConditionalStacks. This preview block is
+                // supplementary — it doesn't replace the toggle, it just
+                // shows what the toggle's current selection amounts to in
+                // real Elation points, since a raw "+20%" doesn't convey
+                // that on its own. allConditionals is already
+                // level-resolved via withResolvedValuesByStack, so the
+                // rate reflects her actual invested Skill level, not a
+                // hardcoded E0 assumption. Like the ATK/SPD previews, the
+                // fallback branch below is a simplified character-level
+                // number (base Elation stat x this one conditional's
+                // rate) — it does NOT fold in other row-scoped Elation
+                // additions (flat-add, ATK/SPD threshold stacking) that
+                // the real per-row damage calc also applies; the EXACT
+                // number (exactElationBreakdown, derived further below
+                // from perRow) is preferred whenever a rotation row
+                // actually exercises this conditional.
+                const elationSelfBoostConditional = allConditionals.find(
+                  (c) => c.statType === 'ELATION_PERCENT_OF_SELF'
+                );
+                const elationSelfBoostStacks = elationSelfBoostConditional
+                  ? aiConditionalStacks[elationSelfBoostConditional.name] || 0
+                  : 0;
+                const elationSelfBoostActive = elationSelfBoostStacks > 0;
+                const elationSelfBoostPreview = (() => {
+                  if (
+                    !elationSelfBoostConditional ||
+                    typeof activeStats?.genericStats?.ElationDamageAddedRatio !== 'number'
+                  ) {
+                    return null;
+                  }
+                  const basePercent = activeStats.genericStats.ElationDamageAddedRatio * 100;
+                  const ratePercent = elationSelfBoostActive
+                    ? elationSelfBoostConditional.valuesByStack[elationSelfBoostStacks - 1] || 0
+                    : 0;
+                  const addedPercent = basePercent * (ratePercent / 100);
+                  return {
+                    basePercent,
+                    ratePercent,
+                    addedPercent,
+                    totalPercent: basePercent + addedPercent,
+                    active: elationSelfBoostActive,
+                  };
+                })();
+
                 const hasElationRow = rotationRows.some((r) => r.damageType === DamageType.ELATION);
 
                 // Some abilities' own DMG multiplier escalates per cast
@@ -3209,6 +3290,20 @@ export default function ProfilePage() {
                   ? computeRotationTotalDamage(activeStats, rotationRows, globalScenario)
                   : { total: null, perRow: [] };
 
+                // Prefer the EXACT breakdown a real rotation row's own
+                // calculation used (captured via calcElationBreakdownOut
+                // in computeScenarioTotalDamage) over the simplified
+                // character-level approximation computed above — the
+                // exact version folds in any other row-scoped Elation
+                // additions (flat-add, ATK/SPD threshold conditionals)
+                // that the approximation deliberately skips. Falls back
+                // to the approximation when no rotation row currently
+                // exercises this conditional (e.g. an empty rotation).
+                const exactElationBreakdown = perRow.find(
+                  (r) => r.elationBreakdown && r.elationBreakdown.totalPercent != null
+                )?.elationBreakdown;
+                const elationDisplay = exactElationBreakdown || elationSelfBoostPreview;
+
                 return (
                   <div className="compare-overlay" onClick={() => setShowDamageCalc(false)}>
                     <div className="compare-modal" onClick={(e) => e.stopPropagation()}>
@@ -3363,6 +3458,25 @@ export default function ProfilePage() {
                                     currently active
                                   </>
                                 )}
+                              </span>
+                            </div>
+                          )}
+                          {elationSelfBoostConditional && elationDisplay && (
+                            <div className="compare-form-row">
+                              <span className="calc-inline-label">
+                                {elationSelfBoostConditional.name}: toggle set above —{' '}
+                                {elationSelfBoostActive ? (
+                                  <>
+                                    Zone active, currently a {elationDisplay.ratePercent.toFixed(1)}% rate — adds{' '}
+                                    <strong>+{elationDisplay.addedPercent.toFixed(1)}</strong>
+                                    {', total '}
+                                    <strong>{elationDisplay.totalPercent.toFixed(1)}%</strong> Elation
+                                  </>
+                                ) : (
+                                  <>not toggled on — adding 0% right now</>
+                                )}
+                                {exactElationBreakdown ? '' : ' (approximate — no rotation row uses this yet)'}
+                                {elationSelfBoostConditional.suspicious && ' — ⚠️ Flagged by the author, see note below'}
                               </span>
                             </div>
                           )}

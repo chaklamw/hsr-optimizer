@@ -23,6 +23,12 @@
 // Skill's array goes to 15 — the full range beyond the Lv.10 E0 cap
 // exists in the data, presumably reachable via eidolon investment, so
 // it's captured in full now even though this app has no eidolon UI yet.
+//
+// Zone Elation Boost (in conditionals below) is also now level-resolved
+// via valuesByStackPerLevel rather than hardcoded to a single level's
+// value — confirmed against Profilepage.jsx's existing
+// getConditionalLiveLevel/resolveConditionalValuesByStack mechanism,
+// which already supports exactly this case.
 
 const characterName = 'Yao Guang';
 
@@ -101,26 +107,31 @@ const conditionals = [
   // Yao Guang's Elation." She's a member of her own ally list, so this
   // DOES apply to her own Elation Skill damage.
   //
-  // KNOWN GAP: this value is itself level-scaled (10% at Skill Lv.1 up
-  // to 25% at Lv.15, 20% at the Lv.10 E0 cap) but this app's conditional
-  // shape (valuesByStack) doesn't have a per-level mechanism the way
-  // abilities now do via baseMultiplierPercentByLevel. Hardcoded to the
-  // Lv.10/E0 value (20%, corrected down from the previous 25%, which was
-  // actually the Lv.15 value) until per-level conditional support exists
-  // or this is confirmed to already be handled elsewhere.
+  // Level-scaled (10% at Skill Lv.1 up to 25% at Lv.15, 20% at the Lv.10
+  // E0 cap) — resolved live via valuesByStackPerLevel, reading her actual
+  // invested Skill level off skillTreeList (Profilepage.jsx's
+  // getConditionalLiveLevel / resolveConditionalValuesByStack), same
+  // mechanism abilities use via baseMultiplierPercentByLevel. Index 0 =
+  // Skill Lv.1. skillMatchName is required here because sourceAbilityName
+  // is the bare kit name ("Decalight Unveils All"), while the live-level
+  // lookup matches against characterSkills' displayName format
+  // ("Skill: Decalight Unveils All").
   {
     name: 'Zone Elation Boost',
     appliesToAbility: 'ALL',
     restrictedToAbilityName: null,
     sourceAbilityName: 'Decalight Unveils All',
+    skillMatchName: 'Skill: Decalight Unveils All',
     statType: 'ELATION_PERCENT_OF_SELF',
-    trigger: "While her own Zone is active (from Skill), increases her Elation by 20% of her current Elation (E0/Lv.10 value)",
-    valuesByStack: [20],
+    trigger: "While her own Zone is active (from Skill), increases her Elation by an amount equal to her Skill level's Zone Elation Boost % of her current Elation",
+    valuesByStackPerLevel: [
+      [10], [11], [12], [13], [14], [15], [16], [18], [19], [20], [21], [22], [23], [24], [25],
+    ],
+    valuesByStack: [20], // fallback / Lv.10 E0-cap value if per-level resolution can't find a level
     maxStacks: 1,
     overflow: null,
-    suspicious: true,
-    suspiciousNote:
-      'Real value is level-scaled 10%-25% across Skill Lv.1-15; hardcoded to the Lv.10 E0-cap value (20%) since conditionals have no per-level array mechanism yet. Will silently under/over-count if Skill level differs from 10 (e.g. via eidolon-extended investment).',
+    suspicious: false,
+    suspiciousNote: '',
   },
 ];
 
