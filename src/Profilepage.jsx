@@ -200,15 +200,54 @@ function resolveConditionalValuesByStack(conditional, character, skillTrees, cha
   return byLevel[index] || conditional.valuesByStack || [];
 }
 
+// A STAT_OVERFLOW_SPLIT conditional can opt into being level-aware by
+// providing primaryRatePerPointByLevel / secondaryRatePerPointByLevel
+// (flat arrays, index 0 = level 1) instead of fixed primaryRatePerPoint /
+// secondaryRatePerPoint — same idea as valuesByStackPerLevel above, one
+// dimension shallower since these are flat per-point rates, not
+// per-stack arrays. Either field can be provided independently; whichever
+// isn't provided keeps using its fixed rate unchanged.
+function resolveOverflowRates(conditional, character, skillTrees, characterSkills) {
+  const overflow = conditional.overflow;
+  if (!overflow) return overflow;
+
+  const level = getConditionalLiveLevel(conditional, character, skillTrees, characterSkills);
+  const resolveFromByLevel = (byLevel, fallback) => {
+    if (!Array.isArray(byLevel) || byLevel.length === 0) return fallback;
+    const index = Math.min(Math.max(level || byLevel.length, 1), byLevel.length) - 1;
+    return byLevel[index] ?? fallback;
+  };
+
+  return {
+    ...overflow,
+    primaryRatePerPoint: resolveFromByLevel(overflow.primaryRatePerPointByLevel, overflow.primaryRatePerPoint),
+    secondaryRatePerPoint: resolveFromByLevel(overflow.secondaryRatePerPointByLevel, overflow.secondaryRatePerPoint),
+  };
+}
+
 // Normalizes a conditional's valuesByStack to the live-level-resolved row
 // once, so every downstream consumer (damage calc's sumConditionalStat,
 // the tooltip, the live preview list) can keep reading c.valuesByStack
 // exactly as before without needing to know about the per-level array.
+// Also resolves a STAT_OVERFLOW_SPLIT conditional's per-point rates the
+// same way, via resolveOverflowRates above, for the identical reason.
 function withResolvedValuesByStack(conditional, character, skillTrees, characterSkills) {
-  if (!Array.isArray(conditional.valuesByStackPerLevel)) return conditional;
+  const hasValuesByStackPerLevel = Array.isArray(conditional.valuesByStackPerLevel);
+  const hasOverflowByLevel =
+    conditional.overflow &&
+    (Array.isArray(conditional.overflow.primaryRatePerPointByLevel) ||
+      Array.isArray(conditional.overflow.secondaryRatePerPointByLevel));
+
+  if (!hasValuesByStackPerLevel && !hasOverflowByLevel) return conditional;
+
   return {
     ...conditional,
-    valuesByStack: resolveConditionalValuesByStack(conditional, character, skillTrees, characterSkills),
+    ...(hasValuesByStackPerLevel && {
+      valuesByStack: resolveConditionalValuesByStack(conditional, character, skillTrees, characterSkills),
+    }),
+    ...(hasOverflowByLevel && {
+      overflow: resolveOverflowRates(conditional, character, skillTrees, characterSkills),
+    }),
   };
 }
 
@@ -1151,6 +1190,13 @@ function computeScenarioTotalDamage(stats, scenario) {
     // for any ability whose multiplier doesn't scale with Elation (i.e.
     // everyone else).
     calcAuthoredMultiplierPerElationPercent,
+    // Whether this specific row's ability/trigger only applies while the
+    // Certified Banger state is active (e.g. Silver Wolf's Top Loot Box,
+    // gated on both Bonus Stage AND Certified Banger, not just the
+    // former). Generic field, not Silver-Wolf-specific — any future
+    // character's kit can set requiresCertifiedBanger on an ability or
+    // attachedTrigger and get the same gating for free.
+    calcAuthoredRequiresCertifiedBanger,
     // Optional mutable object, provided by the caller (see
     // computeRotationTotalDamage), populated as a side effect with the
     // EXACT Elation numbers this specific row's calculation actually
@@ -1182,6 +1228,18 @@ function computeScenarioTotalDamage(stats, scenario) {
   // real-kit-text parsing machinery (hit indices, multi-hit stacking,
   // breath-linked groups, escalating multipliers) that doesn't apply here.
   if (isAuthored) {
+    // Gated abilities/triggers (calcAuthoredRequiresCertifiedBanger, set
+    // from an ability or attachedTrigger's own requiresCertifiedBanger
+    // field) contribute zero damage unless the Certified Banger toggle
+    // is actually on — e.g. Silver Wolf's Top Loot Box, which requires
+    // BOTH Bonus Stage (already implied by which ability this row uses)
+    // AND Certified Banger, not just the former. Checked first, before
+    // any conditional matching or stat resolution, since none of that
+    // matters if this row isn't currently active at all.
+    if (calcAuthoredRequiresCertifiedBanger && !calcUsingCertifiedBanger) {
+      return 0;
+    }
+
     const unlockedTraceNames = getUnlockedTraceNames(activeCharacter, skillTrees);
     const matchedAll = [
       ...aiConditionals.filter((c) =>
@@ -1837,6 +1895,7 @@ function computeRotationTotalDamage(stats, rows, globalScenario) {
       // hit — no existing authored ability needs both at once yet. If one
       // ever does, this will need extending to scale the adjacent hit too.
       calcAuthoredMultiplierPerElationPercent: row.authoredMultiplierPerElationPercent ?? 0,
+      calcAuthoredRequiresCertifiedBanger: !!row.requiresCertifiedBanger,
       calcElationBreakdownOut: elationBreakdownOut,
     };
     const perHit = computeScenarioTotalDamage(stats, rowScenario);
@@ -2393,6 +2452,7 @@ export default function ProfilePage() {
                 hitsAllEnemies: !!triggerData.hitsAllEnemies,
                 blastAdjacentMultiplierPercent: resolveAuthoredBlastAdjacentMultiplierPercent(triggerData, triggerLevel),
                 authoredMultiplierPerElationPercent: triggerData.multiplierPerElationPercent ?? 0,
+                requiresCertifiedBanger: !!triggerData.requiresCertifiedBanger,
                 locked: true,
               };
             }
@@ -2448,6 +2508,7 @@ export default function ProfilePage() {
               hitsAllEnemies: !!abilityData?.hitsAllEnemies,
               blastAdjacentMultiplierPercent: resolveAuthoredBlastAdjacentMultiplierPercent(abilityData, level),
               authoredMultiplierPerElationPercent: abilityData?.multiplierPerElationPercent ?? 0,
+              requiresCertifiedBanger: !!abilityData?.requiresCertifiedBanger,
               locked: true,
               missingSkillMatch: !skillId,
             };
