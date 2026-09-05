@@ -1,15 +1,3 @@
-// Bit flags identifying which attack a set of buffs applies to. A buff that
-// only boosts Skill DMG shouldn't affect a Basic ATK calculation, and this
-// lets a single buff list be filtered by the relevant flag rather than
-// hardcoding per-ability special cases everywhere.
-export const AbilityType = {
-  BASIC: 1 << 0,
-  SKILL: 1 << 1,
-  ULT: 1 << 2,
-  FUA: 1 << 3,
-  DOT: 1 << 4,
-};
-
 export const DamageType = {
   STANDARD: 'STANDARD',
   ELATION: 'ELATION',
@@ -29,7 +17,6 @@ export function computeDamage({
   elementalDmgPercent,
   critRatePercent,
   critDmgPercent,
-  abilityType = AbilityType.SKILL,
   vulnerabilityPercent = 0,
   brokenMultiplier = 1,
 }) {
