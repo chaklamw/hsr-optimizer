@@ -943,6 +943,22 @@ h1 {
   color: var(--text-dim);
 }
 
+/* For multi-segment sentences mixing plain text with inline <strong>
+   emphasis (live conditional previews, e.g. ATK/SPD threshold and Zone
+   Elation Boost). Deliberately NOT display:flex — .calc-inline-label's
+   flex+gap is designed for a short label next to one control, and
+   applying it to a full sentence inserts an 8px gap between every text
+   run and inline element (flexbox gap applies to anonymous text-node
+   flex items too), producing stray spacing around punctuation and
+   before/after <strong> tags. This class keeps normal inline text flow
+   instead. */
+.calc-inline-note {
+  display: block;
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
 .calc-inline-label input {
   width: 60px;
   font: inherit;

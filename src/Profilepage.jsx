@@ -3111,16 +3111,16 @@ export default function ProfilePage() {
                   ) {
                     return null;
                   }
-                  const basePercent = activeStats.genericStats.ElationDamageAddedRatio * 100;
+                  const beforePercent = activeStats.genericStats.ElationDamageAddedRatio * 100;
                   const ratePercent = elationSelfBoostActive
                     ? elationSelfBoostConditional.valuesByStack[elationSelfBoostStacks - 1] || 0
                     : 0;
-                  const addedPercent = basePercent * (ratePercent / 100);
+                  const addedPercent = beforePercent * (ratePercent / 100);
                   return {
-                    basePercent,
+                    beforePercent,
                     ratePercent,
                     addedPercent,
-                    totalPercent: basePercent + addedPercent,
+                    totalPercent: beforePercent + addedPercent,
                     active: elationSelfBoostActive,
                   };
                 })();
@@ -3431,7 +3431,7 @@ export default function ProfilePage() {
                           )}
                           {atkThresholdConditional && atkThresholdBonus && (
                             <div className="compare-form-row">
-                              <span className="calc-inline-label">
+                              <span className="calc-inline-note">
                                 {atkThresholdConditional.name}: always active, no selection needed — at{' '}
                                 {activeStats.atk} ATK ({atkThresholdBonus.atkOverThreshold.toFixed(0)} over the{' '}
                                 {atkThresholdConditional.atkThreshold.baseAtk} threshold), currently granting{' '}
@@ -3442,7 +3442,7 @@ export default function ProfilePage() {
                           )}
                           {spdThresholdConditional && spdThresholdBonus && (
                             <div className="compare-form-row">
-                              <span className="calc-inline-label">
+                              <span className="calc-inline-note">
                                 {spdThresholdConditional.name}: always active, no selection needed — at{' '}
                                 {activeStats.spd} SPD
                                 {spdThresholdBonus.met ? (
@@ -3463,17 +3463,20 @@ export default function ProfilePage() {
                           )}
                           {elationSelfBoostConditional && elationDisplay && (
                             <div className="compare-form-row">
-                              <span className="calc-inline-label">
-                                {elationSelfBoostConditional.name}: toggle set above —{' '}
+                              <span className="calc-inline-note">
+                                {elationSelfBoostConditional.name}: at {elationDisplay.beforePercent.toFixed(1)}%
+                                Elation
                                 {elationSelfBoostActive ? (
                                   <>
-                                    Zone active, currently a {elationDisplay.ratePercent.toFixed(1)}% rate — adds{' '}
-                                    <strong>+{elationDisplay.addedPercent.toFixed(1)}</strong>
-                                    {', total '}
-                                    <strong>{elationDisplay.totalPercent.toFixed(1)}%</strong> Elation
+                                    {' '}— Zone active ({elationDisplay.ratePercent.toFixed(1)}% rate), granting{' '}
+                                    <strong>+{elationDisplay.addedPercent.toFixed(1)}%</strong> — total{' '}
+                                    <strong>{elationDisplay.totalPercent.toFixed(1)}%</strong> Elation right now
                                   </>
                                 ) : (
-                                  <>not toggled on — adding 0% right now</>
+                                  <>
+                                    {' '}— Zone not active (toggle below), total{' '}
+                                    <strong>{elationDisplay.totalPercent.toFixed(1)}%</strong> Elation right now
+                                  </>
                                 )}
                                 {exactElationBreakdown ? '' : ' (approximate — no rotation row uses this yet)'}
                                 {elationSelfBoostConditional.suspicious && ' — ⚠️ Flagged by the author, see note below'}
