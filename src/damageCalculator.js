@@ -1,24 +1,17 @@
-// Bit flags identifying which attack a set of buffs applies to. A buff that
-// only boosts Skill DMG shouldn't affect a Basic ATK calculation, and this
-// lets a single buff list be filtered by the relevant flag rather than
-// hardcoding per-ability special cases everywhere.
-export const AbilityType = {
-  BASIC: 1 << 0,
-  SKILL: 1 << 1,
-  ULT: 1 << 2,
-  FUA: 1 << 3,
-  DOT: 1 << 4,
-};
-
+// Currently supports two damage archetypes, standard being dealt universally and Elation damage
+// being dealt exclusively by Elation characters. Future support will include break / super break
+// damage, damage over time (e.g Kafka, Black Swan, etc,.), and true damage.
 export const DamageType = {
   STANDARD: 'STANDARD',
   ELATION: 'ELATION',
 };
 
-// Standard HSR damage estimate: scaling stat x skill multiplier, modified by
-// DEF mitigation, enemy RES, elemental DMG bonus, and expected CRIT value.
-// Enemy assumptions (level, RES%, DEF shred%) are estimates you provide,
-// not simulated combat — there's no real enemy to reference.
+// Standard HSR damage formula, taken from https://honkai-star-rail.fandom.com/wiki/Damage
+// Capped crit rate, any crit rate above 100% is not being factored unless for special cases 
+// such as Silver Wolf LV.999's crit rate conversion to crit damage, but that's not factored in here.
+// This means that users can still functionally go above 100% crit rate and it will be displayed
+// on the profile, but it will not mean an increase in damage as functionally, going above 100%
+// crit rate does not influence damage.
 export function computeDamage({
   scalingStatValue,
   skillMultiplierPercent,
@@ -29,7 +22,6 @@ export function computeDamage({
   elementalDmgPercent,
   critRatePercent,
   critDmgPercent,
-  abilityType = AbilityType.SKILL,
   vulnerabilityPercent = 0,
   brokenMultiplier = 1,
 }) {
@@ -41,16 +33,6 @@ export function computeDamage({
 
   const resMultiplier = 1 - enemyResPercent / 100;
   const dmgBonusMultiplier = 1 + elementalDmgPercent / 100;
-  // CRIT Rate cannot functionally exceed 100% in-game — any raw stat
-  // beyond that is wasted unless a specific mechanic explicitly redirects
-  // it (e.g. Silver Wolf's Hidden MMR overflow, which already caps its
-  // OWN contribution at 100% and redirects excess into CRIT DMG). That
-  // only protects against overflow from that one mechanism though — if
-  // base gear/relic CRIT Rate alone exceeds 100%, or some other additive
-  // conditional pushes the total over independently, nothing upstream
-  // clamps it before it reaches here. Clamped at this single choke point
-  // so every caller is protected regardless of where the excess came
-  // from, rather than needing every caller to remember to clamp first.
   const clampedCritRatePercent = Math.min(critRatePercent, 100);
   const critMultiplier = 1 + (clampedCritRatePercent / 100) * (critDmgPercent / 100);
   const vulnerabilityMultiplier = 1 + vulnerabilityPercent / 100;
@@ -64,22 +46,16 @@ export function computeDamage({
     vulnerabilityMultiplier *
     brokenMultiplier
   );
-
-  // abilityType isn't used in the formula yet — it's here so callers can
-  // start tagging calculations now. Once character-specific conditional
-  // buffs are added, each buff will declare which AbilityType flag(s) it
-  // applies to, and only matching buffs will feed into dmgBonusMultiplier
-  // for a given call.
 }
 
-// Elation DMG (Path of Elation, HSR 4.0+) is calculated on a completely
-// different track from standard DMG: no ATK/DEF/HP scaling, no DMG Boost,
-// scales instead off character level, the Elation stat, and Punchline /
-// Certified Banger / Merrymake multipliers.
-//
-// The level-scaling term ("Base DMG") comes from a fixed per-level table
-// (Honkai: Star Rail Wiki, Elation DMG#Damage Formula) rather than a
-// formula — index i here is character level i+1.
+// Elation DMG is calculated on a different formula than that of standard damage.
+// Taken from https://honkai-star-rail.fandom.com/wiki/Elation_DMG
+// It scales off of a character's Elation stat, their level, and punchline / certified banger / 
+// merrymake multipliers rather than the standard ATK/DEF/HP scaling. Likewise, it means that 
+// Elation DMG does not get influenced by generic buffs such as DMG % bonus. 
+// Below is the Elation level multipliers taken from the HSR wiki. 
+// Keep in mind arrays are 0-indexed, meaning that index 0 is actually lvl 1, so to access any
+// specific level, need to do it with level - 1.
 const ELATION_LEVEL_MULTIPLIER = [
   108.0, 116.0, 124.0, 135.05276, 141.0188, 147.04564, 153.1321, 159.27693, 165.47893, 171.73688,
   182.98882, 194.13596, 205.17833, 216.11589, 226.94867, 237.67665, 248.29984, 258.81824, 269.23184, 279.54068,
@@ -107,7 +83,6 @@ export function computeElationDamage({
   elationPercent = 0,
   merrymakePercent = 0,
   punchlineValue = 0,
-  usingCertifiedBanger = false,
   critRatePercent = 0,
   critDmgPercent = 0,
   defBonusPercent = 0,
@@ -122,8 +97,8 @@ export function computeElationDamage({
 }) {
   const baseDmg = baseDmgOverride ?? getElationBaseDmg(characterLevel);
   const abilityMultiplier = abilityMultiplierPercent / 100;
-  // Same clamp as computeDamage above, and for the same reason — CRIT
-  // Rate cannot functionally exceed 100% in-game.
+  // Likewise with earlier, Elation DMG does have some crit scaling in it, and functionally any crit
+  // rate above 100% does not influence the damage.  
   const clampedCritRatePercent = Math.min(critRatePercent, 100);
   const critMultiplier = 1 + (clampedCritRatePercent / 100) * (critDmgPercent / 100);
   const elationMultiplier = 1 + elationPercent / 100;
@@ -156,8 +131,4 @@ export function computeElationDamage({
     dmgMitigationMultiplier *
     brokenMultiplier
   );
-
-  // usingCertifiedBanger doesn't change the formula shape — it's there so
-  // the caller remembers to pass Certified Banger stacks (not live
-  // Punchline) into punchlineValue when a hit is produced from that state.
 }
