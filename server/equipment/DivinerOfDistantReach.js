@@ -12,7 +12,7 @@ const conditionalsByTier = {
         "Before combat, if wearer's SPD >= 120/160 (checked once, pre-combat): +10%/18% CRIT Rate. " +
         'Two mutually-exclusive tiers, not additive.',
       valuesByStack: [10, 18],
-      maxStacks: 1,
+      maxStacks: 2,
       overflow: null,
       mutuallyExclusiveTiers: true,
       suspicious: false,
