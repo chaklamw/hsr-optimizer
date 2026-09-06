@@ -1,3 +1,15 @@
+// Bit flags identifying which attack a set of buffs applies to. A buff that
+// only boosts Skill DMG shouldn't affect a Basic ATK calculation, and this
+// lets a single buff list be filtered by the relevant flag rather than
+// hardcoding per-ability special cases everywhere.
+export const AbilityType = {
+  BASIC: 1 << 0,
+  SKILL: 1 << 1,
+  ULT: 1 << 2,
+  FUA: 1 << 3,
+  DOT: 1 << 4,
+};
+
 export const DamageType = {
   STANDARD: 'STANDARD',
   ELATION: 'ELATION',
@@ -17,6 +29,7 @@ export function computeDamage({
   elementalDmgPercent,
   critRatePercent,
   critDmgPercent,
+  abilityType = AbilityType.SKILL,
   vulnerabilityPercent = 0,
   brokenMultiplier = 1,
 }) {
@@ -28,7 +41,18 @@ export function computeDamage({
 
   const resMultiplier = 1 - enemyResPercent / 100;
   const dmgBonusMultiplier = 1 + elementalDmgPercent / 100;
-  const critMultiplier = 1 + (critRatePercent / 100) * (critDmgPercent / 100);
+  // CRIT Rate cannot functionally exceed 100% in-game — any raw stat
+  // beyond that is wasted unless a specific mechanic explicitly redirects
+  // it (e.g. Silver Wolf's Hidden MMR overflow, which already caps its
+  // OWN contribution at 100% and redirects excess into CRIT DMG). That
+  // only protects against overflow from that one mechanism though — if
+  // base gear/relic CRIT Rate alone exceeds 100%, or some other additive
+  // conditional pushes the total over independently, nothing upstream
+  // clamps it before it reaches here. Clamped at this single choke point
+  // so every caller is protected regardless of where the excess came
+  // from, rather than needing every caller to remember to clamp first.
+  const clampedCritRatePercent = Math.min(critRatePercent, 100);
+  const critMultiplier = 1 + (clampedCritRatePercent / 100) * (critDmgPercent / 100);
   const vulnerabilityMultiplier = 1 + vulnerabilityPercent / 100;
 
   return (
@@ -40,6 +64,12 @@ export function computeDamage({
     vulnerabilityMultiplier *
     brokenMultiplier
   );
+
+  // abilityType isn't used in the formula yet — it's here so callers can
+  // start tagging calculations now. Once character-specific conditional
+  // buffs are added, each buff will declare which AbilityType flag(s) it
+  // applies to, and only matching buffs will feed into dmgBonusMultiplier
+  // for a given call.
 }
 
 // Elation DMG (Path of Elation, HSR 4.0+) is calculated on a completely
@@ -92,7 +122,10 @@ export function computeElationDamage({
 }) {
   const baseDmg = baseDmgOverride ?? getElationBaseDmg(characterLevel);
   const abilityMultiplier = abilityMultiplierPercent / 100;
-  const critMultiplier = 1 + (critRatePercent / 100) * (critDmgPercent / 100);
+  // Same clamp as computeDamage above, and for the same reason — CRIT
+  // Rate cannot functionally exceed 100% in-game.
+  const clampedCritRatePercent = Math.min(critRatePercent, 100);
+  const critMultiplier = 1 + (clampedCritRatePercent / 100) * (critDmgPercent / 100);
   const elationMultiplier = 1 + elationPercent / 100;
   const merrymakeMultiplier = 1 + merrymakePercent / 100;
   const punchlineMultiplier = computePunchlineMultiplier(punchlineValue);
