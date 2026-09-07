@@ -13,10 +13,9 @@ const PATHS_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/
 const RELIC_MAIN_AFFIXES_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/relic_main_affixes.json';
 const CHARACTER_SKILLS_URL = 'https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/index_new/en/character_skills.json';
 
-// HSR never puts more than 5 enemies on the field at once, regardless of
-// character or ability — used to cap the "Enemies hit" input so AoE
-// ("hits all enemies") abilities can't be scaled past what's actually
-// possible in game.
+// The game has a max cap of 5 enemies on the battlefield at once. We utilize this to cap the limit
+// so that AoE abilities cannot be scaled past what's possible in game. This is used in the 
+// 'Enemies hit' input field of the calculation.
 const MAX_BATTLEFIELD_ENEMIES = 5;
 
 const ANCHOR_LABELS = {
@@ -78,15 +77,18 @@ const STAT_LABELS = {
   ImaginaryResistanceDelta: 'Imaginary RES',
 };
 
-// Only these represent genuinely flat point values (e.g. "+42" HP).
-// Every other property that reaches genericStats is a percentage,
-// even ones with "Delta" in the name (e.g. PhysicalResistanceDelta).
+// Only these values can be "flat", everything else (including other delta values that are not in 
+// the set) is a % (e.g ATK %, Effect Res %) and those must be calculated by multiplying by 100 
+// since they are stored as a fraction (i.e 3.8% Effect RES is stored as 0.038 and must be 
+// multiplied by 100 to become 3.8).
 const FLAT_STAT_TYPES = new Set(['HPDelta', 'AttackDelta', 'DefenceDelta', 'SpeedDelta']);
 
-// Some stats are exposed under two different property IDs depending on
-// their source (e.g. a trace node vs. a relic substat) but represent the
-// same displayed total. Redirect the alternate ID to a single canonical
-// one so they get summed together instead of showing as duplicate rows.
+// Some stats can be gained from multiple sources, and in the files, they are listed as different
+// property IDs even though they can be combined to reveal a total like how it is in game (e.g 
+// Effect Res % from trace vs Effect Res % from a relic are two different sources but combine when
+// you click to see total stats on a character in game). What this does is that it combines it before 
+// showing a user their stats to prevent duplicate row entries (e.g instead of multiple rows of 
+// Effect RES %, it all gets combined into one lump sum of Effect Res %)
 const CANONICAL_STAT_TYPE = {
   StatusProbabilityBase: 'StatusProbability',
   StatusResistanceBase: 'StatusResistance',
@@ -103,10 +105,9 @@ const CANONICAL_STAT_TYPE = {
   ImaginaryResistanceDelta: 'ImaginaryResistance',
 };
 
-// The 12 possible relic substat types — fixed since the relic system's
-// inception, unlike Paths/Elements which are actual game content that
-// gets added to over time, so this is safe to keep as a fixed list
-// rather than fetching it.
+// All possible substat rolls since the start of the game. This has never changed in the history
+// since the game's creation so it is fine to keep it as an array. In the event that this gets 
+// updated like how they add more Paths in the game, a change will be needed to reflect that. 
 const SUBSTAT_TYPES = [
   'HPDelta',
   'AttackDelta',
@@ -122,6 +123,9 @@ const SUBSTAT_TYPES = [
   'BreakDamageAddedRatioBase',
 ];
 
+// Reverse lookup: given a label, it will return the property id that matches the label
+// e.g Crit Rate -> CriticalChanceBase. This is being used in situations such as OCR scanning
+// in which we scan stats from relics and we need to turn it back into the property id.
 function findStatTypeByLabel(candidateTypes, label) {
   return candidateTypes.find((type) => (STAT_LABELS[type] || type) === label) || '';
 }
