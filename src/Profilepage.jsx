@@ -160,11 +160,11 @@ function conditionalTraceIsUnlocked(conditional, unlockedTraceNames) {
 // Returns the level of a conditional trace or the level of a skill if they exist. 
 // If there is no match to an existing skill OR sourceAbilityName, then it is assumed that it
 // doesn't exist.
-// skillMatchName takes priority of sourceAbilityName
+// skillMatchName takes priority over sourceAbilityName
 // Traces will be matched by checking the prefix ('Trace: ') and if it matches, it returns the level
 // of the trace. If it is a matchName and it is not matching with a trace, it is automatically
 // assumed to be a characterSkill, so the character skill level is returned. 
-// In the current implementation, thisdoes not get called by conditionals given by relics 
+// In the current implementation, this does not get called by conditionals given by relics 
 // so there is no need to implement a failsafe for that. 
 // This function is setup for two different scenarios. One where a trace is giving a buff, and
 // another where a skill is giving a buff. Think of Castorice's Trace: Where The West Wind Dwells
@@ -193,12 +193,19 @@ function getConditionalLiveLevel(conditional, character, skillTrees, characterSk
   return skillId ? getActualSkillLevel(character, skillId, skillTrees) : null;
 }
 
-// A conditional can opt into being level-aware by providing
-// valuesByStackPerLevel (an array of per-stack arrays, index 0 = level 1)
-// instead of a single fixed valuesByStack — same idea as abilities'
-// baseMultiplierPercentByLevel, just one dimension deeper since a
-// conditional's value already varies by stack count. Anything without
-// valuesByStackPerLevel keeps using its fixed valuesByStack unchanged.
+// Checks for any levels on a conditional (if any). If there are no 
+// valuesByStackPerLevel, simply returns the array of valuesByStack. If there
+// are per-level conditionals, returns the stack that matches that skill level. 
+// e.g Castorice's Where The West Wind Dwells is a flat 30% boost, there is no 
+// level associated with it. This is different from Sparxie's Engagement 
+// Farming where each level of her skill has a different multiplier. 
+// In Sparxie's case, it looks up the character's skill level and returns the
+// array that matches that specific skill level. If levels get raised past 
+// what's currently available, instead of raising an error, we default to the 
+// max available level. Likewise, in the event that levels are lower than 
+// what's available, defaults to the minimum available. In the event that an 
+// array has a level index that is null, it defaults to valuesByStack and if 
+// that is null, fallback to an empty array.
 function resolveConditionalValuesByStack(conditional, character, skillTrees, characterSkills) {
   const byLevel = conditional.valuesByStackPerLevel;
   if (!Array.isArray(byLevel) || byLevel.length === 0) {
