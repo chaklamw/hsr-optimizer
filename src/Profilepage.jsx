@@ -130,11 +130,10 @@ function findStatTypeByLabel(candidateTypes, label) {
   return candidateTypes.find((type) => (STAT_LABELS[type] || type) === label) || '';
 }
 
-// character.skillTreeList only contains nodes the account has actually
-// allocated — an unallocated trace simply isn't in the list at all, same
-// as what the "Trace Nodes" detail panel already reads to decide what to
-// display. Matched by name rather than pointId, since a hand-authored
-// conditional has no reason to know a numeric point ID.
+// From a user's character, we access their skill tree and using all of the ids in the user's 
+// character's skill tree, we are able to extract the name of an ability via the skillTrees 
+// passed in. In other words, skillTrees is a lookup table and we look up all the id's in the
+// user's character skill tree to see what they have unlocked.
 function getUnlockedTraceNames(character, skillTrees) {
   const names = new Set();
   (character?.skillTreeList || []).forEach((point) => {
@@ -144,27 +143,33 @@ function getUnlockedTraceNames(character, skillTrees) {
   return names;
 }
 
-// A hand-authored conditional whose sourceAbilityName is prefixed
-// "Trace: <name>" (convention, not enforced by any schema) describes an
-// optional, allocatable trace node rather than a character's inherent
-// Basic/Skill/Ult/Talent — those are never gated, since every character
-// always has their own kit abilities regardless of trace investment.
-// Gating happens once here rather than per-conditional-type, so it
-// applies uniformly to STAT_OVERFLOW_SPLIT, ELATION_PERCENT_*_THRESHOLD,
-// or any ordinary DMG_PERCENT/CRIT_RATE/etc. conditional sourced from a
-// trace, without each needing its own unlock check.
+// Returns true if a conditional is not from a trace, likewise returns true if it is from a trace
+// that the user has unlocked. In the event that a trace that gives a conditional buff is not 
+// unlocked, returns false. Checks if it is from a trace by checking the prefix 'Trace: ' that all
+// trace unlocks start with. We only need to check if it starts with 'Trace: ' because other things
+// such as character abilities (i.e Basic ATK, Skill, ULT) come with a character rather than being
+// unlocked. It is checked by checking the sourceAbilityName. Since this function only checks 
+// sourceAbilityName, it is a universal function that determines if a conditional buff comes 
+// from a trace regardless if it is something like DMG % bonus or Elation % increase.
 function conditionalTraceIsUnlocked(conditional, unlockedTraceNames) {
   const prefix = 'Trace: ';
   if (!conditional.sourceAbilityName?.startsWith(prefix)) return true;
   return unlockedTraceNames.has(conditional.sourceAbilityName.slice(prefix.length));
 }
 
-// Resolves the live level backing a conditional, same "skillMatchName ||
-// sourceAbilityName" convention already used for abilities and attached
-// triggers. Two cases: a "Trace: <name>" source reads the level straight
-// off character.skillTreeList (traces aren't in characterSkills at all),
-// while an ordinary ability name resolves through characterSkills +
-// getActualSkillLevel exactly like a normal rotation row's own ability.
+// Returns the level of a conditional trace or the level of a skill if they exist. 
+// If there is no match to an existing skill OR sourceAbilityName, then it is assumed that it
+// doesn't exist.
+// skillMatchName takes priority of sourceAbilityName
+// Traces will be matched by checking the prefix ('Trace: ') and if it matches, it returns the level
+// of the trace. If it is a matchName and it is not matching with a trace, it is automatically
+// assumed to be a characterSkill, so the character skill level is returned. 
+// In the current implementation, thisdoes not get called by conditionals given by relics 
+// so there is no need to implement a failsafe for that. 
+// This function is setup for two different scenarios. One where a trace is giving a buff, and
+// another where a skill is giving a buff. Think of Castorice's Trace: Where The West Wind Dwells
+// which gives Netherwing 30% DMG boost for each Breath cast within the turn vs Sparxie's
+// Engagement Farming which scales off times she can cast it AND her own skill level. 
 function getConditionalLiveLevel(conditional, character, skillTrees, characterSkills) {
   const matchName = conditional.skillMatchName || conditional.sourceAbilityName;
   if (!matchName) return null;
