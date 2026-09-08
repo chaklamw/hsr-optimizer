@@ -216,13 +216,21 @@ function resolveConditionalValuesByStack(conditional, character, skillTrees, cha
   return byLevel[index] || conditional.valuesByStack || [];
 }
 
-// A STAT_OVERFLOW_SPLIT conditional can opt into being level-aware by
-// providing primaryRatePerPointByLevel / secondaryRatePerPointByLevel
-// (flat arrays, index 0 = level 1) instead of fixed primaryRatePerPoint /
-// secondaryRatePerPoint — same idea as valuesByStackPerLevel above, one
-// dimension shallower since these are flat per-point rates, not
-// per-stack arrays. Either field can be provided independently; whichever
-// isn't provided keeps using its fixed rate unchanged.
+// Different from resolveConditionalValuesByStack, handles STAT_OVERFLOW_SPLIT, 
+// reserved for mechanics that rely on converting resources to stats in combat
+// (e.g Sparxie's A6 Trace, Silver Wolf LV. 999 Hidden MMR conversion). 
+// Similar to the function above, these values may depend on level. 
+// In either case, it will return a JavaScript object in which the 
+// primaryRatePerPoint / secondaryRatePerPoint will be explicitly set matching 
+// to the level value, if there is a byLevelArray. In the event that it doesn't 
+// exist, a fallback is set to the primaryRatePerPoint / secondaryRatePerPoint 
+// respectively. They are independent of each other (i.e  
+// primaryRatePerPointByLevel is not an indicator that 
+// secondaryRatePerPointByLevel exists.) If there is a byLevelArray 
+// but no level is provided, it is defaulted to the max level possible. Keep 
+// in mind that unlike resolveConditionalValuesByStack, this function does not 
+// return an array, but instead the JavaScript object with a flat value in
+// primaryRatePerPoint and secondaryRatePerPoint.
 function resolveOverflowRates(conditional, character, skillTrees, characterSkills) {
   const overflow = conditional.overflow;
   if (!overflow) return overflow;
