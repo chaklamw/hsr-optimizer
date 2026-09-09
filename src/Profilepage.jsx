@@ -1299,10 +1299,22 @@ function computeScenarioTotalDamage(stats, scenario) {
     // count across the rotation (calcAbilityCastCounts) — for a
     // conditional whose sourceAbilityName has to be something else (e.g. a
     // trace's own name, for unlock-gating) while its stacks are actually
-    // driven by a different ability being cast repeatedly; (3) falls back
-    // to the manual global dropdown (aiConditionalStacks) only when
-    // neither row-driven source applies, preserving old behavior rather
-    // than silently zeroing the conditional out.
+    // driven by a different ability being cast repeatedly; (3)
+    // resourceStackThreshold auto-derives a stack count from a raw
+    // resource-point value (e.g. Silver Wolf's Hidden MMR: 1 stack per 60
+    // points) instead of a cast count — this is the "auto apply based on
+    // how much of the resource she has" case, distinct from (1)/(2) which
+    // are both cast-count-driven, not point-value-driven. Currently only
+    // wired to calcPunchlineValue since that's the only free-standing
+    // resource-point input this calculator exposes (Punchline and Hidden
+    // MMR are numerically the same value for Silver Wolf per her Talent
+    // text, and this is the same value the STAT_OVERFLOW_SPLIT/Hidden-MMR-
+    // to-Crit conditional already reads) — generic by field name, not
+    // Silver-Wolf-specific, but a future character whose auto-stacking
+    // resource isn't Punchline-driven would need this extended with its
+    // own input; (4) falls back to the manual global dropdown
+    // (aiConditionalStacks) only when none of the above apply, preserving
+    // old behavior rather than silently zeroing the conditional out.
     const resolveConditionalStacks = (c) => {
       const rowDrivenCount = c.sourceAbilityName
         ? calcSourceAbilityTriggerCounts?.[c.sourceAbilityName]
@@ -1315,6 +1327,12 @@ function computeScenarioTotalDamage(stats, scenario) {
         : undefined;
       if (abilityCastCount != null) {
         return c.maxStacks ? Math.min(c.maxStacks, abilityCastCount) : abilityCastCount;
+      }
+      if (c.resourceStackThreshold?.pointsPerStack) {
+        const derivedCount = Math.floor(
+          Math.max(0, calcPunchlineValue) / c.resourceStackThreshold.pointsPerStack
+        );
+        return c.maxStacks ? Math.min(c.maxStacks, derivedCount) : derivedCount;
       }
       return aiConditionalStacks[c.name] || 0;
     };
@@ -3665,6 +3683,11 @@ export default function ProfilePage() {
                             c.statType !== 'STAT_OVERFLOW_SPLIT' &&
                             c.statType !== 'ELATION_PERCENT_ATK_THRESHOLD' &&
                             c.statType !== 'ELATION_PERCENT_SPD_THRESHOLD' &&
+                            // Auto-derived from a resource-point value (see
+                            // resolveConditionalStacks) — no manual toggle
+                            // needed, same reasoning as the overflow/
+                            // threshold statTypes excluded just above.
+                            !c.resourceStackThreshold &&
                             c !== linkedTraceConditional &&
                             !isDuplicatePerHitTargetConditional(c, multiHitAbilityNames, perHitStackingBonus) &&
                             !selfBuffingConditionalNames.has(c.name) &&
@@ -3708,6 +3731,7 @@ export default function ProfilePage() {
                             c.statType !== 'STAT_OVERFLOW_SPLIT' &&
                             c.statType !== 'ELATION_PERCENT_ATK_THRESHOLD' &&
                             c.statType !== 'ELATION_PERCENT_SPD_THRESHOLD' &&
+                            !c.resourceStackThreshold &&
                             c !== linkedTraceConditional &&
                             !isDuplicatePerHitTargetConditional(c, multiHitAbilityNames, perHitStackingBonus) &&
                             !selfBuffingConditionalNames.has(c.name) &&

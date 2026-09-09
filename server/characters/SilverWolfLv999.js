@@ -329,11 +329,41 @@ const conditionals = [
     suspiciousNote: '',
   },
 
-  // Deliberately dropped: the old cache's "Hidden MMR DMG Boost"
-  // (15%/30% per 60 Hidden MMR) doesn't appear anywhere in the real kit,
-  // relic, or light cone text pulled for this character. Likely a Groq
-  // misattribution from the old extraction pipeline — omitted rather than
-  // carried forward without a source to verify it against.
+  // CORRECTION: previously marked "deliberately dropped" here on the
+  // assumption it didn't appear anywhere in the real kit text. It does —
+  // it's on Bonus Stage: αWolf Instant's OWN ability text (not the
+  // Talent, which is why the earlier pull missed it): "For every 60
+  // points of 'Hidden MMR' held, increases DMG dealt during Enhanced
+  // Basic ATK by 15% of the original DMG, stacking up to 2 time(s)." The
+  // wording is identical at every level Lv.1-10, so this is flat (not
+  // level-scaled) — 15%/30%, matching the old cache's numbers exactly.
+  // Only affects the enhanced Basic ATK, not Silver Wolf's whole kit, so
+  // it's restricted via appliesToAbility: 'BASIC' rather than 'ALL'.
+  // UPDATE: now auto-derived rather than a manual toggle, via a new
+  // resourceStackThreshold field on the conditional (generic, not
+  // Silver-Wolf-specific — resolveConditionalStacks in Profilepage.jsx
+  // now checks it as a 4th stack-resolution source, ahead of the manual
+  // dropdown fallback). Reads the SAME "Punchline / Certified Banger
+  // value" input field already on screen for the Hidden-MMR-to-Crit
+  // overflow conditional above (Punchline = Hidden MMR 1:1 per the Talent
+  // text) — floor(value / 60), capped at maxStacks — so the person enters
+  // their Hidden MMR count once and both conditionals read it
+  // consistently, rather than needing a second manual toggle that could
+  // drift out of sync with the number they typed for the other one.
+  {
+    name: 'Hidden MMR DMG Boost (Enhanced Basic ATK)',
+    appliesToAbility: 'BASIC',
+    restrictedToAbilityName: null,
+    sourceAbilityName: 'Basic ATK: Bonus Stage: αWolf Instant',
+    statType: 'DMG_PERCENT',
+    trigger: 'For every 60 points of "Hidden MMR" held, +15% DMG during Enhanced Basic ATK, stacking up to 2 times (max 30% at 120+ Hidden MMR). Auto-derived from the Punchline/Hidden MMR value field.',
+    valuesByStack: [15, 30],
+    maxStacks: 2,
+    resourceStackThreshold: { pointsPerStack: 60 },
+    overflow: null,
+    suspicious: false,
+    suspiciousNote: '',
+  },
 ];
 
 // Best-effort authored rotation, NOT copied from Fribbels' comboTurnAbilities
