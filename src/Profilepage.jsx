@@ -249,12 +249,16 @@ function resolveOverflowRates(conditional, character, skillTrees, characterSkill
   };
 }
 
-// Normalizes a conditional's valuesByStack to the live-level-resolved row
-// once, so every downstream consumer (damage calc's sumConditionalStat,
-// the tooltip, the live preview list) can keep reading c.valuesByStack
-// exactly as before without needing to know about the per-level array.
-// Also resolves a STAT_OVERFLOW_SPLIT conditional's per-point rates the
-// same way, via resolveOverflowRates above, for the identical reason.
+// In the event that a conditional does not have valuesByStackPerLevel and 
+// doesn't have overflowByLevel, then it returns the conditional as it was.
+// Otherwise, it returns a new conditional object, but with overwritten fields
+// valuesByStack and overflow. They are independent of each other. Keep in mind 
+// that this function itself does not check for a specific level but rather 
+// leaves that to calling resolveConditionalValuesByStack and 
+// resolveOverflowRates. Think of overflow in the sense of filling up a stat
+// and then doing additional conversions to convert it to another stat
+// once stat one reaches a certain point (e.g Silver Wolf's Hidden MMR 
+// conversion from crit rate to crit damage once crit rate is 100%.)
 function withResolvedValuesByStack(conditional, character, skillTrees, characterSkills) {
   const hasValuesByStackPerLevel = Array.isArray(conditional.valuesByStackPerLevel);
   const hasOverflowByLevel =
