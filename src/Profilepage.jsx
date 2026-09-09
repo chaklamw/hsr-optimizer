@@ -123,6 +123,15 @@ const SUBSTAT_TYPES = [
   'BreakDamageAddedRatioBase',
 ];
 
+const RELIC_TYPE_LABELS = {
+  1: 'Head',
+  2: 'Hands',
+  3: 'Body',
+  4: 'Feet',
+  5: 'Planar Sphere',
+  6: 'Link Rope',
+};
+
 // Reverse lookup: given a label, it will return the property id that matches the label
 // e.g Crit Rate -> CriticalChanceBase. This is being used in situations such as OCR scanning
 // in which we scan stats from relics and we need to turn it back into the property id.
@@ -296,15 +305,6 @@ function formatStat(property, value) {
   }
   return `${label} +${(value * 100).toFixed(1)}%`;
 }
-
-const RELIC_TYPE_LABELS = {
-  1: 'Head',
-  2: 'Hands',
-  3: 'Body',
-  4: 'Feet',
-  5: 'Planar Sphere',
-  6: 'Link Rope',
-};
 
 function getValidRelicSets(relicSets, slotType) {
   const wantCavern = slotType <= 4;
