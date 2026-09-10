@@ -288,10 +288,24 @@ function withResolvedValuesByStack(conditional, character, skillTrees, character
   };
 }
 
+// Two parameters get passed into this function call, relicMainAffixes, and 
+// type. Returns all possible main stat choices from a relic slot.
+// relicMainAffixes is a dict, and the keys are strings 'num1num2' where num1
+// indicates the rarity of a relic (in game, it goes from 2-5) and num2 
+// indicates which piece it will be (e.g, 3 will be a body), so key '53'
+// indicates 5 star body piece. Does this by checking id.length == 2
+// and if they are not length 2, then skips them. Doing so prevents
+// keys that don't fit into the schema. Those keys that are getting skipped
+// are duplicate copies so technically Set skips them but the length check
+// mechanism works to keep us from depending on that. 
+// type is an integer (1-6) that indicates which relic piece the function
+// will be looking at, so if we're looking at the wrong piece, we skip it.
+// Once it's a match on the type, then we add each ofthe possible main stat
+// to the set. 
 function getMainStatOptions(relicMainAffixes, type) {
   const props = new Set();
   Object.entries(relicMainAffixes).forEach(([id, group]) => {
-    if (id.length !== 2) return; // skip a handful of anomalous non-standard entries in the data
+    if (id.length !== 2) return; // Skip keys that don't conform to the schema
     if (Number(id[1]) !== type) return;
     Object.values(group.affixes).forEach((a) => props.add(a.property));
   });
