@@ -312,6 +312,13 @@ function getMainStatOptions(relicMainAffixes, type) {
   return Array.from(props);
 }
 
+// As the name suggests, formats a stat allowing it to be shown like how it
+// is in game (e.g effect hit rate 0.03 -> Effect Hit Rate 3.0%, HP +240.3 ->
+// HP +240).
+// label is defined as the value from the STAT_LABELS dict using property
+// as the key. Falls back to property if it cannot be found in STAT_LABELS. 
+// Check if it's a flat stat type, and if it is, rounds accordingly.
+// Otherwise, it is assumed to be a percentage value (e.g. Effect Hit Rate).
 function formatStat(property, value) {
   const label = STAT_LABELS[property] || property;
   if (FLAT_STAT_TYPES.has(property)) {
