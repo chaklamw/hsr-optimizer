@@ -298,15 +298,15 @@ function withResolvedValuesByStack(conditional, character, skillTrees, character
 // keys that don't fit into the schema. Those keys that are getting skipped
 // are duplicate copies so technically Set skips them but the length check
 // mechanism works to keep us from depending on that. 
-// type is an integer (1-6) that indicates which relic piece the function
+// slotType is an integer (1-6) that indicates which relic piece the function
 // will be looking at, so if we're looking at the wrong piece, we skip it.
 // Once it's a match on the type, then we add each ofthe possible main stat
 // to the set. 
-function getMainStatOptions(relicMainAffixes, type) {
+function getMainStatOptions(relicMainAffixes, slotType) {
   const props = new Set();
   Object.entries(relicMainAffixes).forEach(([id, group]) => {
     if (id.length !== 2) return; // Skip keys that don't conform to the schema
-    if (Number(id[1]) !== type) return;
+    if (Number(id[1]) !== slotType) return;
     Object.values(group.affixes).forEach((a) => props.add(a.property));
   });
   return Array.from(props);
@@ -327,6 +327,14 @@ function formatStat(property, value) {
   return `${label} +${(value * 100).toFixed(1)}%`;
 }
 
+// Takes in two parameters, relicSets and slotType
+// relicSets is a JS object that contains all possible relics sets, fetched 
+// from the RELIC_SETS_URL.
+// Similar to function getMainStatOptions, slotType helps indicate what 
+// slots we will be looking at, with 1-4 being the cavern relic sets 
+// and 5-6 being the planar ornament sets. 
+// Returns all valid relic sets that match the slotType given (e.g slot 5 will
+// return all possible planar ornament sets), sorted by name.
 function getValidRelicSets(relicSets, slotType) {
   const wantCavern = slotType <= 4;
   return Object.values(relicSets)
