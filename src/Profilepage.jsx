@@ -353,10 +353,16 @@ async function analyzeRelicImage({ imageDataUrl, slotType, validSetNames, mainSt
   return data;
 }
 
+// relic is what relic the active character has equipped. 
+// using the _flat.setID field, the setID is grabbed.
+// Returns the relic icon URL grabbed from StarRailRes repo.
 function getRelicIconUrl(relic) {
   const setID = relic._flat.setID;
   // Cavern relic pieces (Head/Hands/Body/Feet) are indexed 0-3.
   // Planar ornament pieces (Sphere/Rope) reset back to 0-1.
+  // No risk of overlap since setID helps distinguish it (e.g planar sphere
+  // and cavern relic head both result to index 0, but setID distinguishes
+  // them so we are not looking at the same set.)
   const suffix = relic.type <= 4 ? relic.type - 1 : relic.type - 5;
   return `https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/icon/relic/${setID}_${suffix}.png`;
 }
