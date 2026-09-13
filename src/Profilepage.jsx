@@ -380,14 +380,14 @@ function formatDescPlaceholders(desc, params) {
   });
 }
 
-// A skill's params array can mix genuinely different kinds of values —
-// a damage %, a flat heal amount, an instance count, a heal % — not just
-// "different hit percentages." The #N[fmt]% placeholder syntax in desc
-// tells us which indices are percentages at all (no trailing % means a
-// raw number, like an instance count or flat heal bonus). Among the
-// percentage ones, only those immediately preceded by "DMG" wording are
-// treated as real damage hits — this excludes heal/shield percentages
-// that happen to also be formatted as %.
+// Returns an array of indices that indicate which parts of the params skill
+// array hold damage indicators. This is necessary because some abilities
+// can do other things on top of doing damage (e.g heal % and also do dmg). 
+// Think of Castorice's Netherwing Wing Sweep the Ruins, it does damage
+// on top of healing. 
+// Function is able to do this by scanning through the text and only adding 
+// in possibilities that pertain to damage so it skips instances of healing
+// and other things that do not pertain to damage. 
 function getDamagePercentParamIndices(desc) {
   if (!desc) return [];
   const regex = /#(\d+)\[(i|f1|f2)\](%?)/g;
@@ -401,18 +401,18 @@ function getDamagePercentParamIndices(desc) {
     const before = desc.slice(Math.max(0, match.index - 60), match.index).toLowerCase();
     const after = desc.slice(match.index, Math.min(desc.length, match.index + 40)).toLowerCase();
     const isHealOrShieldContext = /heal|restore|shield|regenerat/.test(before);
-    // Skills like "deals N instance(s) of DMG, each instance dealing X%"
-    // are handled separately by getInstancedHitInfo — excluding them
-    // here avoids showing the same value twice, once as a generic Hit
-    // and once as an instanced hit.
+    // Skills that do multiple instances of damage are handled by 
+    // getInstancedHitInfo so they get excluded here, that way they don't get
+    // shown twice
     const isInstanceContext = /instance/.test(before) || /instance/.test(after);
+    // Skills that have an increasing multiplier such as Castorice's Netherwing
+    // Breath Scorches the Shadow (dmg multiplier increasing per each cast in
+    // the turn) get filtered out here. They later get handled by 
+    // getEscalatingMultipliers
     const isEscalatingMultiplierContext = /progressively|respectively/.test(before);
-    // A "DMG increases by X%... can stack up to N times" pattern (e.g.
-    // Archer's Circuit Connection) describes a self-buffing conditional
-    // triggered by repeated casts of this same ability — not a second
-    // simultaneous hit like a Blast's adjacent target — so it's excluded
-    // here the same way instance/heal percentages are, and picked up
-    // instead by isSelfBuffingSkillConditional from the AI extraction.
+    // Follows a pattern in which a buff can be stacked upon an ability, they
+    // later get handled by isSelfBuffingSkillConditional and a file for each 
+    // character's kit.
     const isSelfStackingBuffContext = /stack/.test(before) || /stack/.test(after);
     const mentionsDmg = /dmg/.test(before);
 
