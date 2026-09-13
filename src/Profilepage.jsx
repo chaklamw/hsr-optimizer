@@ -367,7 +367,8 @@ function getRelicIconUrl(relic) {
   return `https://raw.githubusercontent.com/Mar-7th/StarRailRes/master/icon/relic/${setID}_${suffix}.png`;
 }
 
-function formatLightConeDesc(desc, params) {
+// Formats the description placeholders with the params value that is passed in
+function formatDescPlaceholders(desc, params) {
   if (!desc || !params) return desc;
   return desc.replace(/#(\d+)\[(i|f1|f2)\](%?)/g, (match, idx, fmt, pct) => {
     const raw = params[Number(idx) - 1];
@@ -505,7 +506,7 @@ function getActualSkillLevel(character, skillId, skillTrees) {
 function getSkillDescAtActualLevel(character, skill, skillTrees) {
   const level = getActualSkillLevel(character, skill.id, skillTrees) || skill.max_level || skill.params.length;
   const clampedIndex = Math.min(Math.max(level, 1), skill.params.length) - 1;
-  return formatLightConeDesc(skill.desc, skill.params[clampedIndex]) || skill.desc || '';
+  return formatDescPlaceholders(skill.desc, skill.params[clampedIndex]) || skill.desc || '';
 }
 
 // Hand-authored abilities normally carry one fixed baseMultiplierPercent —
@@ -907,7 +908,7 @@ function mentionsDamage(skill) {
   const firstLevelParams = Array.isArray(skill.params) ? skill.params[0] : null;
   const resolvedDesc =
     (Array.isArray(firstLevelParams) && firstLevelParams.length > 0
-      ? formatLightConeDesc(skill.desc, firstLevelParams)
+      ? formatDescPlaceholders(skill.desc, firstLevelParams)
       : null) || skill.desc || '';
   if (!resolvedDesc) return false;
   return isDamageRelevantText(resolvedDesc);
@@ -921,7 +922,7 @@ function mentionsDamage(skill) {
 // still matching real attacks ("Deals Quantum DMG equal to...").
 function dealsDirectDamage(skill) {
   if (!mentionsDamage(skill)) return false;
-  const resolvedDesc = formatLightConeDesc(skill.desc, skill.params[0]) || skill.desc || '';
+  const resolvedDesc = formatDescPlaceholders(skill.desc, skill.params[0]) || skill.desc || '';
   return /\bdeal(s)?\b[^.]{0,100}\bdmg\b/i.test(resolvedDesc);
 }
 
@@ -984,7 +985,7 @@ function findBreathLinkedGroup(characterSkills, skillIds) {
   Object.values(groups).forEach((ids) => {
     if (found) return;
     const s = characterSkills[ids[0]];
-    const resolvedDesc = formatLightConeDesc(s.desc, s.params[s.params.length - 1]) || s.desc || '';
+    const resolvedDesc = formatDescPlaceholders(s.desc, s.params[s.params.length - 1]) || s.desc || '';
     const escalating = getEscalatingMultipliers(resolvedDesc);
     if (escalating) found = { skillId: ids[0], typeText: s.type_text, name: s.name, escalatingLength: escalating.length };
   });
@@ -1612,7 +1613,7 @@ function computeScenarioTotalDamage(stats, scenario) {
   // ---- END AUTHORED ROW PATH ----
 
   const levelParams = skill.params[calcSkillLevel - 1] || [];
-  const resolvedSkillDesc = formatLightConeDesc(skill.desc, levelParams);
+  const resolvedSkillDesc = formatDescPlaceholders(skill.desc, levelParams);
   const nonStatScalingLabel = getNonStatScalingLabel(resolvedSkillDesc);
   const scalingKey = calcScalingStat ? calcScalingStat.toLowerCase() : '';
   const scalingValue = nonStatScalingLabel ? calcNonStatValue : scalingKey ? stats[scalingKey] : null;
@@ -2154,7 +2155,7 @@ export default function ProfilePage() {
       .filter(mentionsDamage)
       .map((s) => ({
         type: s.type_text || 'Ability',
-        description: formatLightConeDesc(s.desc, s.params[s.params.length - 1]) || s.desc,
+        description: formatDescPlaceholders(s.desc, s.params[s.params.length - 1]) || s.desc,
         name: s.name,
       }))
       .filter((a) => a.description)
@@ -2180,7 +2181,7 @@ export default function ProfilePage() {
       const rankData = lightConeRanks[equipment.tid];
       const lcName = lightConeNames[equipment.tid]?.name || 'Light Cone';
       const lcDesc = rankData
-        ? formatLightConeDesc(rankData.desc, rankData.params?.[equipment.rank - 1]) || rankData.desc || ''
+        ? formatDescPlaceholders(rankData.desc, rankData.params?.[equipment.rank - 1]) || rankData.desc || ''
         : '';
       if (lcDesc && isDamageRelevantText(lcDesc)) {
         abilities.push({
@@ -2238,7 +2239,7 @@ export default function ProfilePage() {
       const treeInfo = skillTrees[point.pointId];
       if (!treeInfo || !treeInfo.desc) return;
       const levelParams = treeInfo.params?.[point.level - 1] || treeInfo.params?.[treeInfo.params.length - 1];
-      const desc = formatLightConeDesc(treeInfo.desc, levelParams) || treeInfo.desc;
+      const desc = formatDescPlaceholders(treeInfo.desc, levelParams) || treeInfo.desc;
       if (desc && isDamageRelevantText(desc) && !seenDescriptions.has(desc)) {
         seenDescriptions.add(desc);
         abilities.push({
@@ -2714,7 +2715,7 @@ export default function ProfilePage() {
                               {lightConeRanks[activeCharacter.equipment.tid]?.skill || lightConeNames[activeCharacter.equipment.tid]?.name}
                             </strong>
                             <p>
-                              {formatLightConeDesc(
+                              {formatDescPlaceholders(
                                 lightConeRanks[activeCharacter.equipment.tid]?.desc,
                                 lightConeRanks[activeCharacter.equipment.tid]?.params?.[activeCharacter.equipment.rank - 1]
                               )}
@@ -3391,7 +3392,7 @@ export default function ProfilePage() {
                     ? activationGroups[selectedSkillKey] || [row.skillId]
                     : [row.skillId];
                   const skill = characterSkills[activationVariantIds[0]];
-                  const resolvedDesc = skill ? formatLightConeDesc(skill.desc, skill.params[row.skillLevel - 1]) : '';
+                  const resolvedDesc = skill ? formatDescPlaceholders(skill.desc, skill.params[row.skillLevel - 1]) : '';
                   const nonStatScalingLabel = getNonStatScalingLabel(resolvedDesc);
                   const damagePercentIndices = skill ? getDamagePercentParamIndices(skill.desc) : [];
                   const hasInstancedHit = skill ? !!getInstancedHitInfo(resolvedDesc) : false;
