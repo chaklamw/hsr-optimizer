@@ -428,14 +428,10 @@ function getDamagePercentParamIndices(desc) {
   return [...new Set(indices)];
 }
 
-// Whether an ability's damage explicitly hits every enemy on the field,
-// as opposed to a single target (the vast majority of abilities). Only
-// abilities matching this should scale with Enemies Hit at all — Blast
-// abilities (main + adjacent) are handled separately via
-// hasMultipleHitValues/MAX_BLAST_ADJACENT_ENEMIES, and everything else
-// (a normal single-target hit) should always be a ×1, regardless of how
-// many enemies are on the field. Plain text match, not tied to any
-// specific character's kit.
+// Function takes in a description of an ability and returns a boolean
+// Returns true if the ability mentions hitting all enemies and false otherwise
+// This means that abilities that only target three enemies still return false.
+// This is done through plain txt matching.
 function isAoEAllEnemiesAbility(desc) {
   return /to all enem(y|ies)/i.test(desc || '');
 }
