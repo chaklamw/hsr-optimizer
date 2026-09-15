@@ -436,12 +436,12 @@ function isAoEAllEnemiesAbility(desc) {
   return /to all enem(y|ies)/i.test(desc || '');
 }
 
-// Skills that fire a fixed number of extra damage instances (e.g.
-// Sparxie's Elation Skill: a base AoE hit, plus 20 fixed instances at a
-// separate % each to a random enemy) don't fit the main/adjacent Hit
-// model — the instance count is a stated number, not tied to how many
-// enemies are on the field. Parsed as its own pattern so its total can
-// be added on top of the base hit rather than confused with it.
+// Given a description of an ability with placeholders resolved, 
+// checks via regex to see if the ability does additional instances of damage, 
+// and if it does, returns a JS object with how many instances of damage 
+// along with the scaling of the ability. In the event that there is no match or
+// no description is provided, it returns null. This function applies to 
+// abilities such as Sparxie's Elation Skill. 
 function getInstancedHitInfo(desc) {
   if (!desc) return null;
   const match = desc.match(
