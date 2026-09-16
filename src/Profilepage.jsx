@@ -132,6 +132,14 @@ const RELIC_TYPE_LABELS = {
   6: 'Link Rope',
 };
 
+// Some abilities have an additional damage amp from another ability 
+// (e.g Sparxie's Engagement Farming is not a damaging skill but rather
+// it boosts the damage of her Enhanced Basic ATK.)
+// This is a regex that scans for a stacking multiplier against one enemy
+// and if it exists, a stacking multiplier for adjacent enemies.
+const PER_HIT_TARGET_STACKING_PATTERN =
+  /multiplier against one designated enemy by ([\d.]+)%(?:[^%]*?multiplier against adjacent targets by ([\d.]+)%)?/i;
+
 // Reverse lookup: given a label, it will return the property id that matches the label
 // e.g Crit Rate -> CriticalChanceBase. This is being used in situations such as OCR scanning
 // in which we scan stats from relics and we need to turn it back into the property id.
@@ -450,17 +458,6 @@ function getInstancedHitInfo(desc) {
   if (!match) return null;
   return { instanceCount: Number(match[1]), perInstancePercent: Number(match[2]) / 100 };
 }
-
-// Some characters' main/adjacent (Blast) hits get boosted by a *separate*
-// ability elsewhere in their kit (e.g. Sparxie's "Engagement Farming"
-// boosting her "Bloom! Winner Takes All" hit), rather than the attack's
-// own text. Scans across every ability's resolved text (not just the
-// one selected) for a "DMG multiplier against one designated enemy by
-// X% ... adjacent targets by Y%" pattern, and returns the per-trigger
-// bonus for each side plus which ability it came from, so the UI can
-// label the input meaningfully without hardcoding a character name.
-const PER_HIT_TARGET_STACKING_PATTERN =
-  /multiplier against one designated enemy by ([\d.]+)%(?:[^%]*?multiplier against adjacent targets by ([\d.]+)%)?/i;
 
 function escapeRegExp(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
