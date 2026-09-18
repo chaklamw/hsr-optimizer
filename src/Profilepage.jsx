@@ -459,6 +459,9 @@ function getInstancedHitInfo(desc) {
   return { instanceCount: Number(match[1]), perInstancePercent: Number(match[2]) / 100 };
 }
 
+// Lots of abilities have things such as brackets or parenthesis. This 
+// function is necessary to make sure that its treated as literal text
+// rather than treating the brackets or parenthesis as regex syntax
 function escapeRegExp(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
