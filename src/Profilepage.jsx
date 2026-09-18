@@ -466,20 +466,17 @@ function escapeRegExp(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// Player's actual current level for a given ability, found by scanning
-// skillTreeList for whichever trace node's own level_up_skills list
-// includes this ability's id — that's the StarRailRes-documented mapping
-// from an ability id to the trace node that actually controls its level.
-// There's no reliable numeric relationship between ability ids (e.g.
-// "150101") and trace node pointIds (e.g. "1501001") to exploit instead —
-// confirmed by checking real data, where a single trace node's level can
-// cover multiple ability ids at once (e.g. an ordinary Basic ATK and its
-// enhanced/finale variant sharing one node). skillTrees is needed
-// alongside skillTreeList since level_up_skills lives on the trace node's
-// own metadata (in skillTrees), not on the skillTreeList entry itself.
-// Returns null (not a fallback) when the ability isn't found in any
-// node's level_up_skills — e.g. abilities without their own tracked
-// level — so callers can fall back to max_level themselves.
+// Function takes in three arguments: character, skillId, and skillTrees
+// Think of character as the specific character in which we are trying
+// to get info on, in other words, the active character in the menu.
+// A character will have their own skillTree, which tells us what
+// nodes in the tree they have unlocked, but what's important is the
+// level. 
+// skillId is the skill that we want to check the level of.
+// skillTrees contains nodes of all activatable traces in the game.
+// It is required in this because it translates each of the points
+// in the character's skilltree to see the specific skillId that we
+// are looking for.
 function getActualSkillLevel(character, skillId, skillTrees) {
   for (const point of character?.skillTreeList || []) {
     const treeInfo = skillTrees[point.pointId];
