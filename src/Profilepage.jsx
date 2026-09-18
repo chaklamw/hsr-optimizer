@@ -460,7 +460,7 @@ function getInstancedHitInfo(desc) {
 }
 
 // Lots of abilities have things such as brackets or parenthesis. This 
-// function is necessary to make sure that its treated as literal text
+// function is necessary to make sure that it's treated as literal text
 // rather than treating the brackets or parenthesis as regex syntax
 function escapeRegExp(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
