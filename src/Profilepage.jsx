@@ -487,15 +487,17 @@ function getActualSkillLevel(character, skillId, skillTrees) {
   return null;
 }
 
-// Same current-level resolution as getActualSkillLevel above, but returns
-// the ability's own desc text formatted at that level instead of the
-// level number itself. Falls back to max_level when the ability isn't
-// tracked in any trace node (e.g. it isn't player-levelable at all).
-// Used anywhere kit text is gathered for damage math or AI extraction
-// input, so a partially-invested ability (like a trace-linked "Skill"
-// entry capped below its own max_level) doesn't get treated as maxed
-// just because that's simpler to assume — generalizes to any character's
-// abilities, not just ones with a known name.
+// Returns the description of an ability formatted with the right
+// numbers in place of the placeholders. Chooses the minimum 
+// between current player trace level and the max it can go.
+// Keep it mind that there are levels in game that are not
+// player obtainable (e.g skills go up to level 15 but the cap
+// for players is 10).
+// Technique nodes automatically default to level 1. Since 
+// technique nodes do not have traditional levels to them like
+// skills do, the technique skill.params.length is 0 so in
+// the indexing, the result becomes -1, defaulting it to the 
+// technique description. 
 function getSkillDescAtActualLevel(character, skill, skillTrees) {
   const level = getActualSkillLevel(character, skill.id, skillTrees) || skill.max_level || skill.params.length;
   const clampedIndex = Math.min(Math.max(level, 1), skill.params.length) - 1;
