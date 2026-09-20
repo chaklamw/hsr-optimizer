@@ -504,15 +504,12 @@ function getSkillDescAtActualLevel(character, skill, skillTrees) {
   return formatDescPlaceholders(skill.desc, skill.params[clampedIndex]) || skill.desc || '';
 }
 
-// Hand-authored abilities normally carry one fixed baseMultiplierPercent —
-// whatever level the author's own account happened to have when they
-// transcribed it from the real tooltip. An ability can opt into being
-// level-aware instead by providing baseMultiplierPercentByLevel (an array,
-// index 0 = level 1), in which case this picks the entry matching the
-// account's actual current level for that ability (already resolved via
-// getActualSkillLevel by the caller) rather than always using whatever
-// level was captured at authoring time. Falls back to the fixed value for
-// any ability that hasn't been migrated to the per-level array yet.
+// Function takes in two parameters, abilityData and level
+// abilityData comes from the hand-authored kits and contains infromation
+// such as the scaling multipliers. 
+// If it exists, it uses the byLevel array from abilityData and returns
+// the multiplier for that specific level
+// Otherwise, it goes back to the base multiplier.
 function resolveAuthoredMultiplierPercent(abilityData, level) {
   const byLevel = abilityData?.baseMultiplierPercentByLevel;
   if (Array.isArray(byLevel) && byLevel.length > 0) {
