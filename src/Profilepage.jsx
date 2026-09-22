@@ -519,10 +519,10 @@ function resolveAuthoredMultiplierPercent(abilityData, level) {
   return abilityData?.baseMultiplierPercent;
 }
 
-// Same level-aware/fixed-value fallback pattern as
-// resolveAuthoredMultiplierPercent above, for a Blast ability's separate
-// adjacent-target multiplier (e.g. Castorice's Silence, Wraithfly's
-// Caress) instead of its main-target one.
+// Similar to resolveAuthoredMultiplierPercent above but returns
+// it for blast abilities.
+// default falls back to the base multiplier and if that doesn't exist
+// returns null.
 function resolveAuthoredBlastAdjacentMultiplierPercent(abilityData, level) {
   const byLevel = abilityData?.blastAdjacentMultiplierPercentByLevel;
   if (Array.isArray(byLevel) && byLevel.length > 0) {
