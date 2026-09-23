@@ -132,14 +132,6 @@ const RELIC_TYPE_LABELS = {
   6: 'Link Rope',
 };
 
-// Some abilities have an additional damage amp from another ability 
-// (e.g Sparxie's Engagement Farming is not a damaging skill but rather
-// it boosts the damage of her Enhanced Basic ATK.)
-// This is a regex that scans for a stacking multiplier against one enemy
-// and if it exists, a stacking multiplier for adjacent enemies.
-const PER_HIT_TARGET_STACKING_PATTERN =
-  /multiplier against one designated enemy by ([\d.]+)%(?:[^%]*?multiplier against adjacent targets by ([\d.]+)%)?/i;
-
 // Reverse lookup: given a label, it will return the property id that matches the label
 // e.g Crit Rate -> CriticalChanceBase. This is being used in situations such as OCR scanning
 // in which we scan stats from relics and we need to turn it back into the property id.
@@ -459,13 +451,6 @@ function getInstancedHitInfo(desc) {
   return { instanceCount: Number(match[1]), perInstancePercent: Number(match[2]) / 100 };
 }
 
-// Lots of abilities have things such as brackets or parenthesis. This 
-// function is necessary to make sure that it's treated as literal text
-// rather than treating the brackets or parenthesis as regex syntax
-function escapeRegExp(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 // Function takes in three arguments: character, skillId, and skillTrees
 // Think of character as the specific character in which we are trying
 // to get info on, in other words, the active character in the menu.
@@ -530,89 +515,6 @@ function resolveAuthoredBlastAdjacentMultiplierPercent(abilityData, level) {
     return byLevel[index];
   }
   return abilityData?.blastAdjacentMultiplierPercent ?? null;
-}
-
-// The trigger cap itself (Sparxie: "up to 20 time(s)") isn't stated in the
-// same ability's text as the DMG-multiplier bonus — it's in whichever
-// ability actually triggers the named source ability repeatedly (for
-// Sparxie, that's her Skill, not "Engagement Farming"'s own entry). Scans
-// every ability's text for the source ability's own name in quotes
-// followed by "up to N time(s)" within the same sentence, so this
-// generalizes to any character with the same phrasing pattern instead of
-// assuming a fixed cap.
-function findMaxTriggerCount(abilities, sourceName) {
-  if (!sourceName) return null;
-  const pattern = new RegExp(`${escapeRegExp(sourceName)}[^.]*?up to (\\d+) time`, 'i');
-  for (const a of abilities) {
-    const match = a.desc.match(pattern);
-    if (match) return Number(match[1]);
-  }
-  return null;
-}
-
-function getPerHitTargetStackingBonus(abilities) {
-  for (const a of abilities) {
-    const match = a.desc.match(PER_HIT_TARGET_STACKING_PATTERN);
-    if (match) {
-      const sourceName = a.name;
-      return {
-        sourceName,
-        mainPerStack: Number(match[1]) / 100,
-        adjacentPerStack: match[2] ? Number(match[2]) / 100 : 0,
-        maxTriggers: findMaxTriggerCount(abilities, sourceName),
-      };
-    }
-  }
-  return null;
-}
-
-// The AI-extracted conditionals matching perHitStackingBonus's source
-// ability were themselves extracted from max-level kit text (kept stable
-// for the shared extraction cache — see hashConditionalsInput in
-// server.js), so their cached valuesByStack doesn't reflect the player's
-// actual current level the way perHitStackingBonus now does. Rather than
-// show a number that can silently disagree with what's actually being
-// calculated, this re-derives the live percentage from
-// perHitStackingBonus directly, distinguishing "main target" vs
-// "adjacent target" by checking the conditional's own trigger text —
-// reading the AI's own generated description rather than any
-// character-specific check, so it holds for any character with this
-// same main/adjacent split.
-function getLivePerHitStackingPercent(conditional, perHitStackingBonus) {
-  if (!perHitStackingBonus) return null;
-  const isAdjacent = /adjacent/i.test(conditional.trigger || '');
-  const fraction = isAdjacent ? perHitStackingBonus.adjacentPerStack : perHitStackingBonus.mainPerStack;
-  return Math.round(fraction * 10000) / 100;
-}
-
-// An AI-extracted (or manual) conditional restricted to a specific ability
-// (via restrictedToAbilityName) duplicates what the dedicated
-// "{ability} triggers" input above already covers whenever that target
-// ability is BOTH one of this character's own multi-hit-target attacks
-// AND already has a per-hit-target-stacking source found for it — in that
-// case, the conditional is virtually certainly describing the exact same
-// mechanic getPerHitTargetStackingBonus already extracted structurally
-// from the raw kit text, just expressed as prose. Deliberately does NOT
-// pattern-match the conditional's own trigger text against
-// PER_HIT_TARGET_STACKING_PATTERN — extraction paraphrases trigger
-// descriptions rather than preserving the source ability's exact wording,
-// so that comparison isn't reliable; restrictedToAbilityName is a
-// structured field and holds up instead.
-function isDuplicatePerHitTargetConditional(conditional, multiHitAbilityNames, perHitStackingBonus) {
-  if (!perHitStackingBonus || !conditional) return false;
-  // sourceAbilityName is stamped server-side from plain code (which ability's
-  // text this conditional was extracted from), not inferred by the model —
-  // so it's a reliable match against perHitStackingBonus's own sourceName
-  // (found the same deterministic way, via regex on raw kit text) even on
-  // runs where the model's restrictedToAbilityName came back null or
-  // reworded. Checked first since it doesn't depend on AI output at all.
-  if (conditional.sourceAbilityName && conditional.sourceAbilityName === perHitStackingBonus.sourceName) {
-    return true;
-  }
-  // Fallback for older cached entries extracted before sourceAbilityName
-  // existed — still useful when the model happened to get
-  // restrictedToAbilityName right.
-  return !!conditional.restrictedToAbilityName && multiHitAbilityNames.has(conditional.restrictedToAbilityName);
 }
 
 // A conditional is "self-buffing" when the same ability both triggers it
@@ -1631,15 +1533,6 @@ function computeScenarioTotalDamage(stats, scenario) {
   const damagePercentIndices = getDamagePercentParamIndices(skill.desc);
   const hitIndices = damagePercentIndices.length > 0 ? damagePercentIndices : instancedHitInfo ? [] : [0];
   const hasMultipleHitValues = hitIndices.length > 1;
-  const allAbilities = (skillIds || [])
-    .map((id) => characterSkills[id])
-    .filter(Boolean)
-    .map((s) => ({
-      name: s.name,
-      desc: getSkillDescAtActualLevel(activeCharacter, s, skillTrees),
-    }))
-    .filter((a) => a.desc);
-  const perHitStackingBonus = hasMultipleHitValues ? getPerHitTargetStackingBonus(allAbilities) : null;
 
   const breathLinkedGroup = findBreathLinkedGroup(characterSkills, skillIds);
   const linkedTraceConditional = findLinkedTraceConditional(
@@ -1647,25 +1540,12 @@ function computeScenarioTotalDamage(stats, scenario) {
     breathLinkedGroup?.name
   );
 
-  // Only this ability's own name is relevant here (not a roster-wide set,
-  // unlike the global toggle-list version of this check further down) —
-  // hasMultipleHitValues already confirms skill.name IS a multi-hit-target
-  // attack, so a conditional restricted to some OTHER ability could never
-  // match perHitStackingBonus's coverage of this one anyway.
-  const multiHitAbilityNamesForThisSkill = hasMultipleHitValues ? new Set([skill.name]) : new Set();
-
   const matchedAll = [
     ...aiConditionals.filter(
-      (c) =>
-        conditionalAppliesToSkill(c, skill.type_text, skill.name) &&
-        c !== linkedTraceConditional &&
-        !isDuplicatePerHitTargetConditional(c, multiHitAbilityNamesForThisSkill, perHitStackingBonus)
+      (c) => conditionalAppliesToSkill(c, skill.type_text, skill.name) && c !== linkedTraceConditional
     ),
     ...manualConditionals.filter(
-      (c) =>
-        conditionalAppliesToSkill(c, skill.type_text, skill.name) &&
-        c !== linkedTraceConditional &&
-        !isDuplicatePerHitTargetConditional(c, multiHitAbilityNamesForThisSkill, perHitStackingBonus)
+      (c) => conditionalAppliesToSkill(c, skill.type_text, skill.name) && c !== linkedTraceConditional
     ),
   ];
   const sumConditionalStat = (statType) =>
@@ -1756,12 +1636,6 @@ function computeScenarioTotalDamage(stats, scenario) {
     ? activationMultipliers[Math.min(calcActivationIndex, activationMultipliers.length - 1)]
     : baseMultiplier;
 
-  const getStackingDmgPercent = (hitIdx) => {
-    if (!perHitStackingBonus) return 0;
-    const perStack = hitIdx === hitIndices[0] ? perHitStackingBonus.mainPerStack : perHitStackingBonus.adjacentPerStack;
-    return perStack * calcStackingTriggers * 100;
-  };
-
   const computeHitDamage = (multiplierFraction, extraDmgPercent = 0) => {
     const brokenMultiplier = calcEnemyBroken ? 1.0 : 0.9;
 
@@ -1800,7 +1674,7 @@ function computeScenarioTotalDamage(stats, scenario) {
       : null;
   };
 
-  const damage = computeHitDamage(selectedActivationMultiplier, getStackingDmgPercent(selectedHitIndex));
+  const damage = computeHitDamage(selectedActivationMultiplier);
   if (damage == null) return null;
 
   const instancedHitDamage = instancedHitInfo ? computeHitDamage(instancedHitInfo.perInstancePercent) : null;
@@ -1817,8 +1691,8 @@ function computeScenarioTotalDamage(stats, scenario) {
   const MAX_BLAST_ADJACENT_ENEMIES = 2;
   const hitsAllEnemies = isAoEAllEnemiesAbility(skill.desc);
   const baseTotalDamage = hasMultipleHitValues
-    ? (computeHitDamage(levelParams[hitIndices[0]], getStackingDmgPercent(hitIndices[0])) || 0) +
-      (computeHitDamage(levelParams[hitIndices[1]], getStackingDmgPercent(hitIndices[1])) || 0) *
+    ? (computeHitDamage(levelParams[hitIndices[0]]) || 0) +
+      (computeHitDamage(levelParams[hitIndices[1]]) || 0) *
         Math.max(0, Math.min(MAX_BLAST_ADJACENT_ENEMIES, calcEnemyCount - 1))
     : damage * (hitsAllEnemies ? calcEnemyCount : 1);
 
@@ -3132,53 +3006,6 @@ export default function ProfilePage() {
 
                 const elementDmgType = ELEMENT_DMG_TYPE[activeInfo?.element];
 
-                // Character-wide (not per-row) detection of a cross-hit
-                // stacking mechanic — e.g. a Blast skill whose main/adjacent
-                // hits both get stronger with repeated triggers of some
-                // other ability. Independent of which rows are in the
-                // rotation right now.
-                //
-                // Suppressed entirely for a hand-authored character
-                // (characterKitOverride?.found === true). This pattern-
-                // detects against REAL raw kit text (allAbilities, from
-                // characterSkills) regardless of authored status — for
-                // Sparxie, her real "Engagement Farming" text matches this
-                // pattern too, which was causing TWO real bugs at once:
-                // (1) it rendered its own dedicated "X triggers" input
-                // whose resulting value is only ever consumed by the
-                // non-authored computeScenarioTotalDamage branch, so
-                // interacting with it silently did nothing for an authored
-                // row, and (2) isDuplicatePerHitTargetConditional used its
-                // presence to hide the hand-authored "Engagement Farming
-                // DMG stacks (main)/(adjacent)" conditionals from the
-                // dropdown list entirely, on the assumption they were
-                // redundant with this auto-detected mechanic — they
-                // weren't; they were the ONLY working path for an authored
-                // character, and were invisible in the UI as a result.
-                const allAbilities = skillIds
-                  .map((id) => characterSkills[id])
-                  .filter(Boolean)
-                  .map((s) => ({
-                    name: s.name,
-                    desc: getSkillDescAtActualLevel(activeCharacter, s, skillTrees),
-                  }))
-                  .filter((a) => a.desc);
-                const perHitStackingBonus =
-                  characterKitOverride?.found === true ? null : getPerHitTargetStackingBonus(allAbilities);
-                // Character-wide set of ability names that have their own
-                // multiple hit-target values (main + adjacent, etc.) — used
-                // to decide whether a restrictedToAbilityName conditional
-                // duplicates perHitStackingBonus's coverage, same signal as
-                // the per-row check above but scoped to the whole roster
-                // since this list isn't tied to one selected row.
-                const multiHitAbilityNames = new Set(
-                  skillIds
-                    .map((id) => characterSkills[id])
-                    .filter(Boolean)
-                    .filter((s) => getDamagePercentParamIndices(s.desc).length > 1)
-                    .map((s) => s.name)
-                );
-
                 const resolvedAiConditionals = aiConditionals.map((c) =>
                   withResolvedValuesByStack(c, activeCharacter, skillTrees, characterSkills)
                 );
@@ -3189,10 +3016,7 @@ export default function ProfilePage() {
                   conditionalTraceIsUnlocked(c, getUnlockedTraceNames(activeCharacter, skillTrees))
                 );
 
-                // Same idea as multiHitAbilityNames above, but for
-                // self-buffing conditionals (an ability whose repeated use
-                // buffs itself, e.g. Archer's Skill stacking) — checked
-                // against rows actually present in the current rotation,
+                // Checked against rows actually present in the current rotation,
                 // NOT every ability in the character's full kit. A
                 // conditional whose sourceAbilityName matches a real kit
                 // ability that was deliberately left out of an authored
@@ -3415,34 +3239,20 @@ export default function ProfilePage() {
                   // activationIndex at all).
                   const hasTurnPositionSelector = !row.locked && (isBreathAbility || isBreathSibling);
 
-                  // hasMultipleHitValues (above) already confirms THIS row's
-                  // own skill is the multi-hit-target ability — combined
-                  // with perHitStackingBonus being non-null (character has
-                  // a stacking source for it somewhere in kit), that's
-                  // sufficient to know this specific row should show the
-                  // input, without re-deriving it from multiHitAbilityNames.
-                  const hasPerHitStackingInput = hasMultipleHitValues && !!perHitStackingBonus;
-                  const perHitStackingConditionals = hasPerHitStackingInput
-                    ? allConditionals.filter((c) =>
-                        isDuplicatePerHitTargetConditional(c, multiHitAbilityNames, perHitStackingBonus)
-                      )
-                    : [];
                   const selfBuffingConditionals = skill
                     ? allConditionals.filter((c) => isSelfBuffingSkillConditional(c, skill.name, skill.type_text))
                     : [];
 
-                  // Hand-authored equivalent of hasPerHitStackingInput above,
-                  // for a DIFFERENT case: a conditional whose
-                  // sourceAbilityName matches THIS row's own ability (e.g.
+                  // For a conditional whose sourceAbilityName matches THIS row's own ability (e.g.
                   // Sparxie's "Engagement Farming" row is the trigger
                   // SOURCE for the DMG% bonus that applies to her separate
                   // "Bloom! Winner Takes All" row). Shows the trigger-count
                   // input on the SOURCE row rather than the target row, and
                   // reuses row.stackingTriggers as the stored value — same
-                  // field the old per-hit-stacking mechanism uses, just
-                  // matched here via a hand-authored conditional's
-                  // sourceAbilityName instead of the raw-kit-text pattern
-                  // detector.
+                  // field the old (now-removed) per-hit-stacking mechanism
+                  // used, just matched here via a hand-authored
+                  // conditional's sourceAbilityName instead of a raw-kit-
+                  // text pattern detector.
                   const authoredTriggerSourceConditionals = row.label
                     ? allConditionals.filter(
                         (c) => c.sourceAbilityName === stripAuthoredAbilityTypePrefix(row.label)
@@ -3463,8 +3273,6 @@ export default function ProfilePage() {
                     isBreathAbility,
                     isBreathSibling,
                     hasTurnPositionSelector,
-                    hasPerHitStackingInput,
-                    perHitStackingConditionals,
                     selfBuffingConditionals,
                     hasAuthoredTriggerSourceInput,
                     authoredTriggerSourceConditionals,
@@ -3721,7 +3529,6 @@ export default function ProfilePage() {
                             // threshold statTypes excluded just above.
                             !c.resourceStackThreshold &&
                             c !== linkedTraceConditional &&
-                            !isDuplicatePerHitTargetConditional(c, multiHitAbilityNames, perHitStackingBonus) &&
                             !selfBuffingConditionalNames.has(c.name) &&
                             !authoredTriggerSourceConditionalNames.has(c.name)
                         )
@@ -3765,7 +3572,6 @@ export default function ProfilePage() {
                             c.statType !== 'ELATION_PERCENT_SPD_THRESHOLD' &&
                             !c.resourceStackThreshold &&
                             c !== linkedTraceConditional &&
-                            !isDuplicatePerHitTargetConditional(c, multiHitAbilityNames, perHitStackingBonus) &&
                             !selfBuffingConditionalNames.has(c.name) &&
                             !authoredTriggerSourceConditionalNames.has(c.name)
                         )
@@ -4058,41 +3864,6 @@ export default function ProfilePage() {
                                     )
                                   )}
                                 </select>
-                              </div>
-                            )}
-
-                            {meta.hasPerHitStackingInput && (
-                              <div className="compare-form-row">
-                                <span className="calc-inline-label">
-                                  {perHitStackingBonus.sourceName} triggers
-                                  {meta.perHitStackingConditionals.map((c) => {
-                                    const liveValue = getLivePerHitStackingPercent(c, perHitStackingBonus);
-                                    const displayConditional =
-                                      liveValue != null ? { ...c, valuesByStack: [liveValue] } : c;
-                                    return <ConditionalHelpTooltip key={c.name} c={displayConditional} />;
-                                  })}
-                                </span>
-                                <input
-                                  type="number"
-                                  min="0"
-                                  max={perHitStackingBonus.maxTriggers ?? undefined}
-                                  value={row.stackingTriggers ?? 0}
-                                  onChange={(e) => {
-                                    const raw = Math.max(0, Number(e.target.value) || 0);
-                                    // Derived from kit text (findMaxTriggerCount)
-                                    // rather than a fixed number, so this holds
-                                    // up for any future character with the same
-                                    // "X can be triggered repeatedly, up to N
-                                    // time(s)" phrasing, even if N isn't 20.
-                                    // Falls back to unbounded if the cap
-                                    // couldn't be found in kit text at all.
-                                    const clamped =
-                                      perHitStackingBonus.maxTriggers != null
-                                        ? Math.min(perHitStackingBonus.maxTriggers, raw)
-                                        : raw;
-                                    updateRotationRow(row.id, { stackingTriggers: clamped });
-                                  }}
-                                />
                               </div>
                             )}
 
