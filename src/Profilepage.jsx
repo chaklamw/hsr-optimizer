@@ -132,6 +132,16 @@ const RELIC_TYPE_LABELS = {
   6: 'Link Rope',
 };
 
+const ELEMENT_DMG_TYPE = {
+  Physical: 'PhysicalAddedRatio',
+  Fire: 'FireAddedRatio',
+  Ice: 'IceAddedRatio',
+  Lightning: 'ThunderAddedRatio',
+  Wind: 'WindAddedRatio',
+  Quantum: 'QuantumAddedRatio',
+  Imaginary: 'ImaginaryAddedRatio',
+};
+
 // Reverse lookup: given a label, it will return the property id that matches the label
 // e.g Crit Rate -> CriticalChanceBase. This is being used in situations such as OCR scanning
 // in which we scan stats from relics and we need to turn it back into the property id.
@@ -529,16 +539,6 @@ function isSelfBuffingSkillConditional(conditional, skillName, skillTypeText) {
   if (conditional.sourceAbilityName !== skillName) return false;
   return conditionalAppliesToSkill(conditional, skillTypeText, skillName);
 }
-
-const ELEMENT_DMG_TYPE = {
-  Physical: 'PhysicalAddedRatio',
-  Fire: 'FireAddedRatio',
-  Ice: 'IceAddedRatio',
-  Lightning: 'ThunderAddedRatio',
-  Wind: 'WindAddedRatio',
-  Quantum: 'QuantumAddedRatio',
-  Imaginary: 'ImaginaryAddedRatio',
-};
 
 
 async function extractConditionals(characterName, abilities) {
