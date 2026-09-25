@@ -532,6 +532,9 @@ function resolveAuthoredBlastAdjacentMultiplierPercent(abilityData, level) {
   return abilityData?.blastAdjacentMultiplierPercent ?? null;
 }
 
+// Given the name of an ability and the list of abilities, if any of the abilities mention
+// triggering ability sourceName up to x times, then it returns x
+// Otherwise returns null.
 function findMaxTriggerCount(abilities, sourceName) {
   if (!sourceName) return null;
   const pattern = new RegExp(`${escapeRegExp(sourceName)}[^.]*?up to (\\d+) time`, 'i');
