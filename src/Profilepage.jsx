@@ -545,6 +545,11 @@ function findMaxTriggerCount(abilities, sourceName) {
   return null;
 }
 
+// Functions takes in a list of abilities, and looks through them to find a match for
+// PER_HIT_TARGET_STACKING_PATTERN. If it is a match, we return the that abilitiy's name
+// along with the stacking information such as how many times it can trigger, and 
+// the multipler increase per stack.
+// If it doesn't find anything, returns null. 
 function getPerHitTargetStackingBonus(abilities) {
   for (const a of abilities) {
     const match = a.desc.match(PER_HIT_TARGET_STACKING_PATTERN);
