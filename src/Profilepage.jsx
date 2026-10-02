@@ -390,77 +390,6 @@ function formatDescPlaceholders(desc, params) {
   });
 }
 
-// Returns an array of indices that indicate which parts of the params skill
-// array hold damage indicators. This is necessary because some abilities
-// can do other things on top of doing damage (e.g heal % and also do dmg). 
-// Think of Castorice's Netherwing Wing Sweep the Ruins, it does damage
-// on top of healing. 
-// Function is able to do this by scanning through the text and only adding 
-// in possibilities that pertain to damage so it skips instances of healing
-// and other things that do not pertain to damage. 
-function getDamagePercentParamIndices(desc) {
-  if (!desc) return [];
-  const regex = /#(\d+)\[(i|f1|f2)\](%?)/g;
-  const indices = [];
-  let match;
-  while ((match = regex.exec(desc)) !== null) {
-    const idx = Number(match[1]) - 1;
-    const isPercent = match[3] === '%';
-    if (!isPercent) continue;
-
-    const before = desc.slice(Math.max(0, match.index - 60), match.index).toLowerCase();
-    const after = desc.slice(match.index, Math.min(desc.length, match.index + 40)).toLowerCase();
-    const isHealOrShieldContext = /heal|restore|shield|regenerat/.test(before);
-    // Skills that do multiple instances of damage are handled by 
-    // getInstancedHitInfo so they get excluded here, that way they don't get
-    // shown twice
-    const isInstanceContext = /instance/.test(before) || /instance/.test(after);
-    // Skills that have an increasing multiplier such as Castorice's Netherwing
-    // Breath Scorches the Shadow (dmg multiplier increasing per each cast in
-    // the turn) get filtered out here. They later get handled by 
-    // getEscalatingMultipliers
-    const isEscalatingMultiplierContext = /progressively|respectively/.test(before);
-    // Follows a pattern in which a buff can be stacked upon an ability, they
-    // later get handled by isSelfBuffingSkillConditional and a file for each 
-    // character's kit.
-    const isSelfStackingBuffContext = /stack/.test(before) || /stack/.test(after);
-    const mentionsDmg = /dmg/.test(before);
-
-    if (
-      mentionsDmg &&
-      !isHealOrShieldContext &&
-      !isInstanceContext &&
-      !isEscalatingMultiplierContext &&
-      !isSelfStackingBuffContext
-    )
-      indices.push(idx);
-  }
-  return [...new Set(indices)];
-}
-
-// Function takes in a description of an ability and returns a boolean
-// Returns true if the ability mentions hitting all enemies and false otherwise
-// This means that abilities that only target three enemies still return false.
-// This is done through plain txt matching.
-function isAoEAllEnemiesAbility(desc) {
-  return /to all enem(y|ies)/i.test(desc || '');
-}
-
-// Given a description of an ability with placeholders resolved, 
-// checks via regex to see if the ability does additional instances of damage, 
-// and if it does, returns a JS object with how many instances of damage 
-// along with the scaling of the ability. In the event that there is no match or
-// no description is provided, it returns null. This function applies to 
-// abilities such as Sparxie's Elation Skill. 
-function getInstancedHitInfo(desc) {
-  if (!desc) return null;
-  const match = desc.match(
-    /(\d+)\s*(?:additional\s+)?instance\(s\) of DMG[\s\S]{0,60}?each instance deal(?:s|ing)[\s\S]{0,60}?([\d.]+)%/i
-  );
-  if (!match) return null;
-  return { instanceCount: Number(match[1]), perInstancePercent: Number(match[2]) / 100 };
-}
-
 // Function takes in three arguments: character, skillId, and skillTrees
 // Think of character as the specific character in which we are trying
 // to get info on, in other words, the active character in the menu.
@@ -508,19 +437,6 @@ function resolveAuthoredBlastAdjacentMultiplierPercent(abilityData, level) {
     return byLevel[index];
   }
   return abilityData?.blastAdjacentMultiplierPercent ?? null;
-}
-
-// A conditional is "self-buffing" when the same ability both triggers it
-// (sourceAbilityName) and receives its bonus (conditionalAppliesToSkill).
-// Those are naturally tied to that specific ability rather than being a
-// roster-wide toggle, so — like the per-hit-target duplicates above —
-// they're better shown inline on that ability's own row than in the
-// general conditionals list. Generalizes to any character/ability, not
-// just ones with a known name.
-function isSelfBuffingSkillConditional(conditional, skillName, skillTypeText) {
-  if (!conditional?.sourceAbilityName || !skillName) return false;
-  if (conditional.sourceAbilityName !== skillName) return false;
-  return conditionalAppliesToSkill(conditional, skillTypeText, skillName);
 }
 
 async function extractConditionals(characterName, abilities) {
@@ -778,98 +694,6 @@ function mentionsDamage(skill) {
   return isDamageRelevantText(resolvedDesc);
 }
 
-// Stricter than mentionsDamage: requires an active "deal(s) ... DMG"
-// phrase, which is how HSR consistently words abilities that actually
-// deal damage when used. This correctly excludes things like Castorice's
-// Ultimate ("Summons the memosprite... If Castorice has the DMG Boost
-// effect...") which mentions DMG without an attack happening, while
-// still matching real attacks ("Deals Quantum DMG equal to...").
-function dealsDirectDamage(skill) {
-  if (!mentionsDamage(skill)) return false;
-  const resolvedDesc = formatDescPlaceholders(skill.desc, skill.params[0]) || skill.desc || '';
-  return /\bdeal(s)?\b[^.]{0,100}\bdmg\b/i.test(resolvedDesc);
-}
-
-// Talents and Techniques often mention "DMG" while describing a
-// conditional buff to something else (e.g. a memosprite's damage on
-// healing) rather than being a direct attack themselves — exactly the
-// kind of thing the conditional detector should read, but not
-// something the player can select and calculate a hit for. The
-// calculator's own skill picker is restricted to actual player-cast
-// attacks.
-const DIRECT_ATTACK_TYPES = new Set(['Basic ATK', 'Skill', 'Ultimate', 'Memosprite Skill', 'Elation Skill']);
-
-// A handful of skills (e.g. Little Ica's) don't scale off ATK/DEF/HP at
-// all — their base damage comes from some other tracked value, like a
-// running tally of healing done in the battle. Detected generically from
-// the resolved description text rather than hardcoded to one character,
-// so it keeps working if a future character shares the mechanic.
-function getNonStatScalingLabel(resolvedDesc) {
-  if (!resolvedDesc) return null;
-  if (/tally of healing/i.test(resolvedDesc)) return 'Healing tally this battle';
-  return null;
-}
-
-// Some repeated-cast skills (e.g. Castorice's memosprite "Breath Scorches
-// the Shadow") show up as multiple skill IDs in the data, one per cast —
-// but only the FIRST entry's own description text actually states every
-// cast's multiplier ("...DMG multiplier increased progressively to
-// 39.2% / 47.6%..."); the later entries are generic flavor text with no
-// restated number. So later casts are modeled by parsing this pattern
-// out of the first entry's text rather than trusting the other skill
-// IDs to carry their own correct value.
-function getEscalatingMultipliers(resolvedDesc) {
-  if (!resolvedDesc) return null;
-  const match = resolvedDesc.match(/increas\w*\s+(?:progressively|respectively)\s+to\s+([\d.]+)%\s*\/\s*([\d.]+)%/i);
-  if (!match) return null;
-  return [Number(match[1]) / 100, Number(match[2]) / 100];
-}
-
-function isSelectableAttack(skill) {
-  return dealsDirectDamage(skill) && DIRECT_ATTACK_TYPES.has(skill.type_text);
-}
-
-// Groups a character's selectable abilities by name+type_text (the same
-// grouping rule used for the Cast dropdown), then finds whichever group's
-// own text describes an escalating per-cast DMG multiplier (e.g.
-// Castorice's Breath Scorches the Shadow), plus flags it as a "family"
-// shared with any other ability of the same type_text (e.g. Claw Splits
-// the Veil, Wings Sweep the Ruins) that can follow it within the same
-// turn. Not specific to any one character by name — this is detected
-// purely from whichever ability's text matches getEscalatingMultipliers.
-function findBreathLinkedGroup(characterSkills, skillIds) {
-  const groups = {};
-  (skillIds || []).forEach((id) => {
-    const s = characterSkills[id];
-    if (!s || !isSelectableAttack(s)) return;
-    const key = `${s.name}__${s.type_text}`;
-    (groups[key] = groups[key] || []).push(id);
-  });
-  let found = null;
-  Object.values(groups).forEach((ids) => {
-    if (found) return;
-    const s = characterSkills[ids[0]];
-    const resolvedDesc = formatDescPlaceholders(s.desc, s.params[s.params.length - 1]) || s.desc || '';
-    const escalating = getEscalatingMultipliers(resolvedDesc);
-    if (escalating) found = { skillId: ids[0], typeText: s.type_text, name: s.name, escalatingLength: escalating.length };
-  });
-  return found;
-}
-
-// The authored conditional that should sync to the
-// escalating ability's own turn-position selector instead of staying an
-// independently-selected stack count — identified generically by its
-// trigger text referencing the escalating ability by name, rather than
-// hardcoded to one character's specific trace/conditional name.
-function findLinkedTraceConditional(conditionals, breathAbilityName) {
-  if (!breathAbilityName) return null;
-  const needle = breathAbilityName.toLowerCase();
-  return (
-    conditionals.find((c) => c.statType === 'DMG_PERCENT' && (c.trigger || '').toLowerCase().includes(needle)) ||
-    null
-  );
-}
-
 const TOTAL_REQUESTS = 10;
 
 function computeFinalStats(character, promotions, relicSets, skillTrees, lightConeRanks) {
@@ -1043,12 +867,7 @@ function computeScenarioTotalDamage(stats, scenario) {
   const {
     activeCharacter,
     characterSkills,
-    skillIds,
     skillTrees,
-    calcSkillId,
-    calcSkillLevel,
-    calcActivationIndex,
-    calcParamIndex,
     calcEnemyLevel,
     calcEnemyRes,
     calcDefShred,
@@ -1060,13 +879,8 @@ function computeScenarioTotalDamage(stats, scenario) {
     calcUsingCertifiedBanger,
     calcUsingOverflowSplit,
     calcScalingStat,
-    calcNonStatValue,
-    calcStackingTriggers,
-    calcSelfBuffCastNumber,
     // Shared across every row in the rotation (built once from ALL rows'
-    // own stackingTriggers, keyed by each row's stripped ability name) —
-    // NOT the same as calcStackingTriggers above, which is this row's own
-    // local trigger count for the old same-row per-hit-stacking pattern.
+    // own stackingTriggers, keyed by each row's stripped ability name).
     // This lets a conditional whose sourceAbilityName matches a DIFFERENT
     // row (e.g. Sparxie's "Engagement Farming" row driving a DMG_PERCENT
     // bonus on her separate "Bloom! Winner Takes All" row) read that
@@ -1087,15 +901,11 @@ function computeScenarioTotalDamage(stats, scenario) {
     // its stacks).
     calcAbilityCastCounts,
     authoredConditionals,
-    manualConditionals,
     authoredConditionalStacks,
     elementDmgType,
-    // Only present for rows built from a hand-authored character file
-    // (server/characters/*.js). Matches Fribbels' own model exactly: the
-    // multiplier is a fixed hand-typed percentage, not derived from
-    // characterSkills/level params, and there's no hit-index/multi-hit/
-    // breath-link resolution — that machinery exists specifically to parse
-    // ambiguous real kit text, which an authored row doesn't have.
+    // Rows come from a hand-authored character file (server/characters/*.js):
+    // the multiplier is a fixed hand-typed percentage, not derived from
+    // characterSkills/level params. A row without one calculates nothing.
     calcAuthoredMultiplierPercent,
     calcAuthoredAbilityName,
     calcAuthoredAbilityType,
@@ -1135,10 +945,7 @@ function computeScenarioTotalDamage(stats, scenario) {
   } = scenario;
 
   if (!stats) return null;
-  const isAuthored = calcAuthoredMultiplierPercent != null;
-  if (!isAuthored && !calcSkillId) return null;
-  const skill = isAuthored ? null : characterSkills[calcSkillId];
-  if (!isAuthored && !skill) return null;
+  if (calcAuthoredMultiplierPercent == null) return null;
 
   const elementalDmgPercent =
     elementDmgType && stats.genericStats[elementDmgType] ? stats.genericStats[elementDmgType] * 100 : 0;
@@ -1150,403 +957,119 @@ function computeScenarioTotalDamage(stats, scenario) {
     ? stats.genericStats.ElationDamageAddedRatio * 100
     : 0;
 
-  // ---- AUTHORED ROW PATH ----
-  // Self-contained: computes conditional matching, DEF/RES/CRIT/overflow,
-  // and final damage independently of everything below, which is all
-  // real-kit-text parsing machinery (hit indices, multi-hit stacking,
-  // breath-linked groups, escalating multipliers) that doesn't apply here.
-  if (isAuthored) {
-    // Gated abilities/triggers (calcAuthoredRequiresCertifiedBanger, set
-    // from an ability or attachedTrigger's own requiresCertifiedBanger
-    // field) contribute zero damage unless the Certified Banger toggle
-    // is actually on — e.g. Silver Wolf's Top Loot Box, which requires
-    // BOTH Bonus Stage (already implied by which ability this row uses)
-    // AND Certified Banger, not just the former. Checked first, before
-    // any conditional matching or stat resolution, since none of that
-    // matters if this row isn't currently active at all.
-    if (calcAuthoredRequiresCertifiedBanger && !calcUsingCertifiedBanger) {
-      return 0;
-    }
-
-    const unlockedTraceNames = getUnlockedTraceNames(activeCharacter, skillTrees);
-    const matchedAll = authoredConditionals
-      .filter((c) => conditionalAppliesToSkill(c, null, calcAuthoredAbilityName, calcAuthoredAbilityType))
-      .filter((c) => !c.restrictedToDamageType || c.restrictedToDamageType === calcDamageType)
-      .filter((c) => conditionalTraceIsUnlocked(c, unlockedTraceNames))
-      .map((c) => withResolvedValuesByStack(c, activeCharacter, skillTrees, characterSkills));
-
-    if (typeof window !== 'undefined' && window.__debugAuthoredConditionalMatching) {
-      console.log('[AUTHORED ROW]', {
-        calcAuthoredAbilityName,
-        calcAuthoredAbilityType,
-        allAiConditionalNames: authoredConditionals.map((c) => ({
-          name: c.name,
-          restrictedToAbilityName: c.restrictedToAbilityName ?? null,
-          statType: c.statType,
-        })),
-        matchedNames: matchedAll.map((c) => c.name),
-        authoredConditionalStacksSnapshot: { ...authoredConditionalStacks },
-      });
-    }
-
-    // Resolves a conditional's effective stack count, checking sources in
-    // order: (1) sourceAbilityName matches a rotation row's own
-    // stackingTriggers input (calcSourceAbilityTriggerCounts) — the
-    // row-driven, self-explaining count the person actually set; (2)
-    // stackSourceAbilityName matches a DIFFERENT ability's total cast
-    // count across the rotation (calcAbilityCastCounts) — for a
-    // conditional whose sourceAbilityName has to be something else (e.g. a
-    // trace's own name, for unlock-gating) while its stacks are actually
-    // driven by a different ability being cast repeatedly; (3)
-    // resourceStackThreshold auto-derives a stack count from a raw
-    // resource-point value (e.g. Silver Wolf's Hidden MMR: 1 stack per 60
-    // points) instead of a cast count — this is the "auto apply based on
-    // how much of the resource she has" case, distinct from (1)/(2) which
-    // are both cast-count-driven, not point-value-driven. Currently only
-    // wired to calcPunchlineValue since that's the only free-standing
-    // resource-point input this calculator exposes (Punchline and Hidden
-    // MMR are numerically the same value for Silver Wolf per her Talent
-    // text, and this is the same value the STAT_OVERFLOW_SPLIT/Hidden-MMR-
-    // to-Crit conditional already reads) — generic by field name, not
-    // Silver-Wolf-specific, but a future character whose auto-stacking
-    // resource isn't Punchline-driven would need this extended with its
-    // own input; (4) falls back to the manual global dropdown
-    // (authoredConditionalStacks) only when none of the above apply, preserving
-    // old behavior rather than silently zeroing the conditional out.
-    const resolveConditionalStacks = (c) => {
-      const rowDrivenCount = c.sourceAbilityName
-        ? calcSourceAbilityTriggerCounts?.[c.sourceAbilityName]
-        : undefined;
-      if (rowDrivenCount != null) {
-        return c.maxStacks ? Math.min(c.maxStacks, rowDrivenCount) : rowDrivenCount;
-      }
-      const abilityCastCount = c.stackSourceAbilityName
-        ? calcAbilityCastCounts?.[c.stackSourceAbilityName]
-        : undefined;
-      if (abilityCastCount != null) {
-        return c.maxStacks ? Math.min(c.maxStacks, abilityCastCount) : abilityCastCount;
-      }
-      if (c.resourceStackThreshold?.pointsPerStack) {
-        const derivedCount = Math.floor(
-          Math.max(0, calcPunchlineValue) / c.resourceStackThreshold.pointsPerStack
-        );
-        return c.maxStacks ? Math.min(c.maxStacks, derivedCount) : derivedCount;
-      }
-      return authoredConditionalStacks[c.name] || 0;
-    };
-
-    const sumConditionalStat = (statType) =>
-      matchedAll.reduce((sum, c) => {
-        if (c.statType !== statType) return sum;
-        const stacks = resolveConditionalStacks(c);
-        return sum + (c.valuesByStack[stacks - 1] || 0);
-      }, 0);
-
-    const aiResPenPercent = sumConditionalStat('RES_PEN');
-    const aiDefPenPercent = sumConditionalStat('DEF_PEN');
-    const aiVulnerabilityPercent = sumConditionalStat('VULNERABILITY');
-    const aiCritRateBonus = sumConditionalStat('CRIT_RATE');
-    const aiCritDmgBonus = sumConditionalStat('CRIT_DMG');
-
-    // Blast-portion-aware version of the sum above. Most DMG_PERCENT
-    // conditionals apply uniformly to a whole ability's damage — Engagement
-    // Farming (Sparxie) is the first case where a real kit text gives
-    // DIFFERENT percentages for a Blast ability's main-target hit vs. its
-    // adjacent-target hits. A conditional with no restrictedToBlastPortion
-    // field is included in BOTH sums below (unchanged behavior for every
-    // conditional authored before this fix); one that sets 'MAIN' or
-    // 'ADJACENT' only counts toward that portion.
-    const sumDmgPercentForBlastPortion = (portion) =>
-      matchedAll.reduce((sum, c) => {
-        if (c.statType !== 'DMG_PERCENT') return sum;
-        if (c.restrictedToBlastPortion && c.restrictedToBlastPortion !== portion) return sum;
-        const stacks = resolveConditionalStacks(c);
-        return sum + (c.valuesByStack[stacks - 1] || 0);
-      }, 0);
-    // aiDmgPercent below is used for the main hit (and the non-Blast paths,
-    // where it's the only DMG% sum that matters) — it now excludes any
-    // ADJACENT-only conditional, which sumConditionalStat's plain unfiltered
-    // sum would have incorrectly included.
-    let aiDmgPercent = sumDmgPercentForBlastPortion('MAIN');
-    const aiDmgPercentAdjacentPortion = sumDmgPercentForBlastPortion('ADJACENT');
-    let aiAtkPercentBonus = sumConditionalStat('ATK_PERCENT');
-
-    const effectiveEnemyRes = calcEnemyRes - aiResPenPercent;
-    const effectiveDefShred = calcDefShred + aiDefPenPercent;
-    const baseCritRatePercent = parseFloat(stats.critRate) + aiCritRateBonus;
-    const baseCritDmgPercent = parseFloat(stats.critDmg) + aiCritDmgBonus;
-
-    const overflowConditional = matchedAll.find((c) => c.statType === 'STAT_OVERFLOW_SPLIT' && c.overflow);
-    let overflowCritRateBonus = 0;
-    let overflowCritDmgBonus = 0;
-    if (calcUsingOverflowSplit && overflowConditional) {
-      const { overflow } = overflowConditional;
-      const baseValueByStat = {
-        CRIT_RATE: baseCritRatePercent,
-        CRIT_DMG: baseCritDmgPercent,
-        DMG_PERCENT: aiDmgPercent,
-        ATK_PERCENT: aiAtkPercentBonus,
-      };
-      const split = computeStatOverflowSplit(baseValueByStat[overflow.primaryStat] ?? 0, calcPunchlineValue, overflow);
-      const applyBonus = (statKey, bonus) => {
-        if (statKey === 'CRIT_RATE') overflowCritRateBonus += bonus;
-        else if (statKey === 'CRIT_DMG') overflowCritDmgBonus += bonus;
-        // NOTE: only feeds the main-hit aiDmgPercent, not
-        // aiDmgPercentAdjacentPortion — STAT_OVERFLOW_SPLIT (Silver Wolf's
-        // Hidden MMR) has never co-occurred with a Blast-pattern ability in
-        // any authored character, so this hasn't needed fixing. If a
-        // future character combines both, the adjacent hit will be missing
-        // this bonus.
-        else if (statKey === 'DMG_PERCENT') aiDmgPercent += bonus;
-        else if (statKey === 'ATK_PERCENT') aiAtkPercentBonus += bonus;
-      };
-      applyBonus(overflow.primaryStat, split.primaryBonus);
-      applyBonus(overflow.secondaryStat, split.secondaryBonus);
-    }
-
-    const effectiveCritRatePercent = baseCritRatePercent + overflowCritRateBonus;
-    const effectiveCritDmgPercent = baseCritDmgPercent + overflowCritDmgBonus;
-
-    // Flat, additive Elation-stat bonus (e.g. a light cone's "all allies
-    // +X% Elation" on some trigger) — a straightforward percentage-point
-    // add, same shape as DMG_PERCENT/CRIT_RATE/etc., unlike the
-    // multiplicative-of-self case just below. Applied BEFORE any
-    // %-of-current-Elation multiplier, since a %-of-current mechanic
-    // should read the character's actual total Elation (flat buffs
-    // included), not just their unbuffed base value.
-    const aiElationFlatAddPercent = sumConditionalStat('ELATION_PERCENT_FLAT_ADD');
-
-    // ATK-threshold-to-Elation conversion (e.g. Sparxie's "Sweet! Punchline
-    // Signing": +5% Elation per 100 ATK above 2000, capped at +80%). Unlike
-    // STAT_OVERFLOW_SPLIT (Silver Wolf's Hidden MMR), the input here is the
-    // character's own live ATK stat, not a manually-entered resource-point
-    // count — so it reads `stats.atk` directly rather than a scenario
-    // input field. Uses the same "effective ATK" definition as an
-    // ATK-scaling ability's own damage calc (base ATK x (1 +
-    // aiAtkPercentBonus%)) so a separate ATK_PERCENT conditional correctly
-    // pushes a character over/further past the threshold too.
-    const atkThresholdConditional = matchedAll.find((c) => c.statType === 'ELATION_PERCENT_ATK_THRESHOLD');
-    let aiElationFromAtkThreshold = 0;
-    if (atkThresholdConditional?.atkThreshold && typeof stats.atk === 'number') {
-      const { baseAtk, atkPerUnit, elationPercentPerUnit, capPercent } = atkThresholdConditional.atkThreshold;
-      const effectiveAtkForThreshold = stats.atk * (1 + aiAtkPercentBonus / 100);
-      const unitsOverThreshold = Math.max(0, effectiveAtkForThreshold - baseAtk) / atkPerUnit;
-      aiElationFromAtkThreshold = Math.min(capPercent, unitsOverThreshold * elationPercentPerUnit);
-    }
-
-    // Self-referential Elation bonus — "increases Elation by X% of the
-    // character's OWN current Elation" (e.g. Yaoguang's Zone). This is
-    // multiplicative on her own base Elation, not a flat percentage-point
-    // add like DMG_PERCENT/CRIT_RATE/etc, so it gets the same kind of
-    // dedicated handling STAT_OVERFLOW_SPLIT gets above for its own
-    // non-standard shape, rather than being forced through the ordinary
-    // additive sumConditionalStat path. A character being buffed by their
-    // OWN "all allies" effect isn't a cross-character-buff problem — they
-    // count as one of their own allies — so this fits the existing
-    // single-character model cleanly.
-    // SPD-threshold-to-Elation conversion (e.g. Silver Wolf LV.999's False
-    // Ending Speedrun: at 160+ SPD, +50% Elation, then +2% per SPD point
-    // above 160, up to 100 excess SPD counted). Same live-stat-driven shape
-    // as ELATION_PERCENT_ATK_THRESHOLD above, but with a base % granted
-    // immediately at the threshold rather than scaling purely linearly from
-    // zero, and the excess is capped by a max SPD amount rather than a
-    // total percent cap.
-    const spdThresholdConditional = matchedAll.find((c) => c.statType === 'ELATION_PERCENT_SPD_THRESHOLD');
-    let aiElationFromSpdThreshold = 0;
-    if (spdThresholdConditional?.spdThreshold && typeof stats.spd === 'number') {
-      const { baseSpd, basePercent, spdPerUnit, elationPercentPerUnit, maxExcessSpd } =
-        spdThresholdConditional.spdThreshold;
-      if (stats.spd >= baseSpd) {
-        const excessSpd = Math.min(maxExcessSpd, stats.spd - baseSpd);
-        aiElationFromSpdThreshold = basePercent + (excessSpd / spdPerUnit) * elationPercentPerUnit;
-      }
-    }
-
-    const elationSelfScaledConditional = matchedAll.find((c) => c.statType === 'ELATION_PERCENT_OF_SELF');
-    let effectiveElationPercent =
-      elationPercent + aiElationFlatAddPercent + aiElationFromAtkThreshold + aiElationFromSpdThreshold;
-    if (elationSelfScaledConditional) {
-      const stacks = resolveConditionalStacks(elationSelfScaledConditional);
-      const selfScaleRate = elationSelfScaledConditional.valuesByStack[stacks - 1] || 0;
-      const preSelfScalePercent = effectiveElationPercent;
-      effectiveElationPercent = preSelfScalePercent * (1 + selfScaleRate / 100);
-      if (calcElationBreakdownOut) {
-        calcElationBreakdownOut.ratePercent = selfScaleRate;
-        calcElationBreakdownOut.beforePercent = preSelfScalePercent;
-        calcElationBreakdownOut.addedPercent = effectiveElationPercent - preSelfScalePercent;
-        calcElationBreakdownOut.totalPercent = effectiveElationPercent;
-      }
-    }
-
-    const scalingKeyAuthored = calcScalingStat ? calcScalingStat.toLowerCase() : '';
-    const rawScalingValue = scalingKeyAuthored ? stats[scalingKeyAuthored] : null;
-    const effectiveScalingValue =
-      scalingKeyAuthored === 'atk' && typeof rawScalingValue === 'number'
-        ? rawScalingValue * (1 + aiAtkPercentBonus / 100)
-        : rawScalingValue;
-
-    const brokenMultiplier = calcEnemyBroken ? 1.0 : 0.9;
-
-    // Shared by the main hit and (if this is a Blast-pattern ability) the
-    // adjacent-target hits below — everything except the multiplier itself
-    // is identical between them, so this avoids duplicating the whole
-    // computeDamage/computeElationDamage call shape twice.
-    function computeAuthoredHit(multiplierPercent, dmgPercentOverride = aiDmgPercent) {
-      if (isElation) {
-        return computeElationDamage({
-          abilityMultiplierPercent: multiplierPercent,
-          characterLevel: activeCharacter.level,
-          enemyLevel: calcEnemyLevel,
-          elationPercent: effectiveElationPercent,
-          merrymakePercent: calcMerrymakePercent,
-          punchlineValue: calcPunchlineValue,
-          usingCertifiedBanger: calcUsingCertifiedBanger,
-          critRatePercent: effectiveCritRatePercent,
-          critDmgPercent: effectiveCritDmgPercent,
-          enemyResPercent: effectiveEnemyRes,
-          defReductionPercent: effectiveDefShred,
-          vulnerabilityPercent: aiVulnerabilityPercent,
-          brokenMultiplier,
-        });
-      }
-      if (effectiveScalingValue == null) return null;
-      return computeDamage({
-        scalingStatValue: effectiveScalingValue,
-        skillMultiplierPercent: multiplierPercent,
-        characterLevel: activeCharacter.level,
-        enemyLevel: calcEnemyLevel,
-        enemyResPercent: effectiveEnemyRes,
-        defShredPercent: effectiveDefShred,
-        elementalDmgPercent: elementalDmgPercent + allDmgPercent + dmgPercentOverride,
-        critRatePercent: effectiveCritRatePercent,
-        critDmgPercent: effectiveCritDmgPercent,
-        vulnerabilityPercent: aiVulnerabilityPercent,
-        brokenMultiplier,
-      });
-    }
-
-    const hitDamage = computeAuthoredHit(
-      calcAuthoredMultiplierPercent +
-        (calcAuthoredMultiplierPerElationPercent
-          ? calcAuthoredMultiplierPerElationPercent * effectiveElationPercent
-          : 0)
-    );
-    if (hitDamage == null) return null;
-
-    // Blast: main target takes the full hit above, and up to 2 adjacent
-    // targets each take a separately-declared reduced hit — a real,
-    // confirmed HSR mechanic (Blast always hits exactly 3 targets when
-    // enough enemies are present: 1 main + 2 adjacent), not a guess. The
-    // adjacent count is capped by how many OTHER enemies actually exist,
-    // so a single-target scenario correctly gets zero adjacent damage.
-    let totalDamage = hitDamage;
-    if (calcAuthoredBlastAdjacentMultiplierPercent != null) {
-      const adjacentTargetCount = Math.max(0, Math.min(2, calcEnemyCount - 1));
-      if (adjacentTargetCount > 0) {
-        // aiDmgPercentAdjacentPortion is the FULL adjacent-hit sum already
-        // (unrestricted conditionals + ADJACENT-restricted ones) — do not
-        // add aiDmgPercent on top, that would double-count anything without
-        // a restrictedToBlastPortion (i.e. every pre-existing conditional).
-        const adjacentHit = computeAuthoredHit(
-          calcAuthoredBlastAdjacentMultiplierPercent,
-          aiDmgPercentAdjacentPortion
-        );
-        if (adjacentHit != null) totalDamage += adjacentHit * adjacentTargetCount;
-      }
-    }
-
-    // averagedAcrossEnemies (Fribbels' formula shape, e.g. Silver Wolf's
-    // Bonus Stage) DIVIDES by enemy count; hitsAllEnemies (ordinary true
-    // AoE, e.g. "deals X% DMG to all enemies" with no "split evenly"
-    // language) MULTIPLIES — same semantics as the non-authored path's own
-    // hitsAllEnemies handling further below (damage * calcEnemyCount). The
-    // three flags (Blast/averaged/hitsAll) are mutually exclusive in
-    // practice; if more than one were somehow set, Blast's adjacent-target
-    // total is computed first, then divided or multiplied same as a plain
-    // hit would be.
-    if (calcAuthoredAveragedAcrossEnemies) return totalDamage / Math.max(1, calcEnemyCount);
-    if (calcAuthoredHitsAllEnemies) return totalDamage * calcEnemyCount;
-    return totalDamage;
+  // Gated abilities/triggers (calcAuthoredRequiresCertifiedBanger, set
+  // from an ability or attachedTrigger's own requiresCertifiedBanger
+  // field) contribute zero damage unless the Certified Banger toggle
+  // is actually on — e.g. Silver Wolf's Top Loot Box, which requires
+  // BOTH Bonus Stage (already implied by which ability this row uses)
+  // AND Certified Banger, not just the former. Checked first, before
+  // any conditional matching or stat resolution, since none of that
+  // matters if this row isn't currently active at all.
+  if (calcAuthoredRequiresCertifiedBanger && !calcUsingCertifiedBanger) {
+    return 0;
   }
-  // ---- END AUTHORED ROW PATH ----
 
-  const levelParams = skill.params[calcSkillLevel - 1] || [];
-  const resolvedSkillDesc = formatDescPlaceholders(skill.desc, levelParams);
-  const nonStatScalingLabel = getNonStatScalingLabel(resolvedSkillDesc);
-  const scalingKey = calcScalingStat ? calcScalingStat.toLowerCase() : '';
-  const scalingValue = nonStatScalingLabel ? calcNonStatValue : scalingKey ? stats[scalingKey] : null;
+  const unlockedTraceNames = getUnlockedTraceNames(activeCharacter, skillTrees);
+  const matchedAll = authoredConditionals
+    .filter((c) => conditionalAppliesToSkill(c, null, calcAuthoredAbilityName, calcAuthoredAbilityType))
+    .filter((c) => !c.restrictedToDamageType || c.restrictedToDamageType === calcDamageType)
+    .filter((c) => conditionalTraceIsUnlocked(c, unlockedTraceNames))
+    .map((c) => withResolvedValuesByStack(c, activeCharacter, skillTrees, characterSkills));
 
-  // Moved ahead of matchedAll below (rather than staying inline with the
-  // rest of the hit-index/multiplier logic further down) because excluding
-  // duplicate per-hit-target conditionals needs to know whether THIS
-  // ability has a dedicated stacking bonus before matchedAll is built.
-  //
-  // Some abilities' entire damage output is instance-based (e.g.
-  // Castorice's Netherwing: "6 instance(s) of DMG... to one random
-  // enemy", with no separate non-instanced hit at all) — for those,
-  // getDamagePercentParamIndices correctly finds no legitimate damage
-  // index (it deliberately excludes instance-context percentages), but
-  // falling back to param index 0 would treat whatever unrelated value
-  // lives there as a phantom base hit that then wrongly scales with
-  // Enemies Hit below. Falling back to an empty hitIndices instead makes
-  // that phantom hit contribute 0, leaving instancedHitTotal (added on
-  // separately further down) as the ability's only damage — which is
-  // correct, since "one random enemy" per instance doesn't scale with
-  // battlefield size any more than the Blast pattern above does.
-  const instancedHitInfo = getInstancedHitInfo(resolvedSkillDesc);
-  const damagePercentIndices = getDamagePercentParamIndices(skill.desc);
-  const hitIndices = damagePercentIndices.length > 0 ? damagePercentIndices : instancedHitInfo ? [] : [0];
-  const hasMultipleHitValues = hitIndices.length > 1;
+  if (typeof window !== 'undefined' && window.__debugAuthoredConditionalMatching) {
+    console.log('[AUTHORED ROW]', {
+      calcAuthoredAbilityName,
+      calcAuthoredAbilityType,
+      allAiConditionalNames: authoredConditionals.map((c) => ({
+        name: c.name,
+        restrictedToAbilityName: c.restrictedToAbilityName ?? null,
+        statType: c.statType,
+      })),
+      matchedNames: matchedAll.map((c) => c.name),
+      authoredConditionalStacksSnapshot: { ...authoredConditionalStacks },
+    });
+  }
 
-  const breathLinkedGroup = findBreathLinkedGroup(characterSkills, skillIds);
-  const linkedTraceConditional = findLinkedTraceConditional(
-    [...authoredConditionals, ...manualConditionals],
-    breathLinkedGroup?.name
-  );
+  // Resolves a conditional's effective stack count, checking sources in
+  // order: (1) sourceAbilityName matches a rotation row's own
+  // stackingTriggers input (calcSourceAbilityTriggerCounts) — the
+  // row-driven, self-explaining count the person actually set; (2)
+  // stackSourceAbilityName matches a DIFFERENT ability's total cast
+  // count across the rotation (calcAbilityCastCounts) — for a
+  // conditional whose sourceAbilityName has to be something else (e.g. a
+  // trace's own name, for unlock-gating) while its stacks are actually
+  // driven by a different ability being cast repeatedly; (3)
+  // resourceStackThreshold auto-derives a stack count from a raw
+  // resource-point value (e.g. Silver Wolf's Hidden MMR: 1 stack per 60
+  // points) instead of a cast count — this is the "auto apply based on
+  // how much of the resource she has" case, distinct from (1)/(2) which
+  // are both cast-count-driven, not point-value-driven. Currently only
+  // wired to calcPunchlineValue since that's the only free-standing
+  // resource-point input this calculator exposes (Punchline and Hidden
+  // MMR are numerically the same value for Silver Wolf per her Talent
+  // text, and this is the same value the STAT_OVERFLOW_SPLIT/Hidden-MMR-
+  // to-Crit conditional already reads) — generic by field name, not
+  // Silver-Wolf-specific, but a future character whose auto-stacking
+  // resource isn't Punchline-driven would need this extended with its
+  // own input; (4) falls back to the manual global dropdown
+  // (authoredConditionalStacks) only when none of the above apply, preserving
+  // old behavior rather than silently zeroing the conditional out.
+  const resolveConditionalStacks = (c) => {
+    const rowDrivenCount = c.sourceAbilityName
+      ? calcSourceAbilityTriggerCounts?.[c.sourceAbilityName]
+      : undefined;
+    if (rowDrivenCount != null) {
+      return c.maxStacks ? Math.min(c.maxStacks, rowDrivenCount) : rowDrivenCount;
+    }
+    const abilityCastCount = c.stackSourceAbilityName
+      ? calcAbilityCastCounts?.[c.stackSourceAbilityName]
+      : undefined;
+    if (abilityCastCount != null) {
+      return c.maxStacks ? Math.min(c.maxStacks, abilityCastCount) : abilityCastCount;
+    }
+    if (c.resourceStackThreshold?.pointsPerStack) {
+      const derivedCount = Math.floor(
+        Math.max(0, calcPunchlineValue) / c.resourceStackThreshold.pointsPerStack
+      );
+      return c.maxStacks ? Math.min(c.maxStacks, derivedCount) : derivedCount;
+    }
+    return authoredConditionalStacks[c.name] || 0;
+  };
 
-  const matchedAll = [
-    ...authoredConditionals.filter(
-      (c) => conditionalAppliesToSkill(c, skill.type_text, skill.name) && c !== linkedTraceConditional
-    ),
-    ...manualConditionals.filter(
-      (c) => conditionalAppliesToSkill(c, skill.type_text, skill.name) && c !== linkedTraceConditional
-    ),
-  ];
   const sumConditionalStat = (statType) =>
     matchedAll.reduce((sum, c) => {
       if (c.statType !== statType) return sum;
-      const stacks = isSelfBuffingSkillConditional(c, skill.name, skill.type_text)
-        ? Math.max(0, Math.min(c.maxStacks, (calcSelfBuffCastNumber || 1) - 1))
-        : authoredConditionalStacks[c.name] || 0;
+      const stacks = resolveConditionalStacks(c);
       return sum + (c.valuesByStack[stacks - 1] || 0);
     }, 0);
 
-  // The escalating ability's own row treats calcActivationIndex as a
-  // 0-indexed cast number (cast N -> stack N), while a sibling ability
-  // (one that can follow it within the same turn but doesn't escalate its
-  // own multiplier) treats it as a literal preceding-breath count, which
-  // can legitimately be 0.
-  const isBreathAbility = !!breathLinkedGroup && calcSkillId === breathLinkedGroup.skillId;
-  const isBreathSibling =
-    !!breathLinkedGroup && !isBreathAbility && skill.type_text === breathLinkedGroup.typeText;
-  const linkedTraceStackCount = isBreathAbility
-    ? calcActivationIndex + 1
-    : isBreathSibling
-    ? calcActivationIndex
-    : 0;
-  const linkedTraceBonus =
-    linkedTraceConditional && linkedTraceStackCount > 0
-      ? linkedTraceConditional.valuesByStack[
-          Math.min(linkedTraceStackCount, linkedTraceConditional.maxStacks) - 1
-        ] || 0
-      : 0;
-
-  let aiDmgPercent = sumConditionalStat('DMG_PERCENT') + linkedTraceBonus;
   const aiResPenPercent = sumConditionalStat('RES_PEN');
   const aiDefPenPercent = sumConditionalStat('DEF_PEN');
   const aiVulnerabilityPercent = sumConditionalStat('VULNERABILITY');
   const aiCritRateBonus = sumConditionalStat('CRIT_RATE');
   const aiCritDmgBonus = sumConditionalStat('CRIT_DMG');
+
+  // Blast-portion-aware version of the sum above. Most DMG_PERCENT
+  // conditionals apply uniformly to a whole ability's damage — Engagement
+  // Farming (Sparxie) is the first case where a real kit text gives
+  // DIFFERENT percentages for a Blast ability's main-target hit vs. its
+  // adjacent-target hits. A conditional with no restrictedToBlastPortion
+  // field is included in BOTH sums below (unchanged behavior for every
+  // conditional authored before this fix); one that sets 'MAIN' or
+  // 'ADJACENT' only counts toward that portion.
+  const sumDmgPercentForBlastPortion = (portion) =>
+    matchedAll.reduce((sum, c) => {
+      if (c.statType !== 'DMG_PERCENT') return sum;
+      if (c.restrictedToBlastPortion && c.restrictedToBlastPortion !== portion) return sum;
+      const stacks = resolveConditionalStacks(c);
+      return sum + (c.valuesByStack[stacks - 1] || 0);
+    }, 0);
+  // aiDmgPercent below is used for the main hit (and the non-Blast paths,
+  // where it's the only DMG% sum that matters) — it now excludes any
+  // ADJACENT-only conditional, which sumConditionalStat's plain unfiltered
+  // sum would have incorrectly included.
+  let aiDmgPercent = sumDmgPercentForBlastPortion('MAIN');
+  const aiDmgPercentAdjacentPortion = sumDmgPercentForBlastPortion('ADJACENT');
   let aiAtkPercentBonus = sumConditionalStat('ATK_PERCENT');
 
   const effectiveEnemyRes = calcEnemyRes - aiResPenPercent;
@@ -1554,14 +1077,6 @@ function computeScenarioTotalDamage(stats, scenario) {
   const baseCritRatePercent = parseFloat(stats.critRate) + aiCritRateBonus;
   const baseCritDmgPercent = parseFloat(stats.critDmg) + aiCritDmgBonus;
 
-  // STAT_OVERFLOW_SPLIT conditionals (see server.js) are authored from
-  // this specific character's kit, so this only fires for characters whose
-  // kit actually describes a mechanic shaped like this — no
-  // character-name checks involved. The resource point count is read from
-  // the Punchline field since that's the only free-standing numeric
-  // "stack" input the Elation calculator currently exposes; a character
-  // whose overflow resource isn't Punchline-driven would need a dedicated
-  // input, which isn't built yet.
   const overflowConditional = matchedAll.find((c) => c.statType === 'STAT_OVERFLOW_SPLIT' && c.overflow);
   let overflowCritRateBonus = 0;
   let overflowCritDmgBonus = 0;
@@ -1577,6 +1092,12 @@ function computeScenarioTotalDamage(stats, scenario) {
     const applyBonus = (statKey, bonus) => {
       if (statKey === 'CRIT_RATE') overflowCritRateBonus += bonus;
       else if (statKey === 'CRIT_DMG') overflowCritDmgBonus += bonus;
+      // NOTE: only feeds the main-hit aiDmgPercent, not
+      // aiDmgPercentAdjacentPortion — STAT_OVERFLOW_SPLIT (Silver Wolf's
+      // Hidden MMR) has never co-occurred with a Blast-pattern ability in
+      // any authored character, so this hasn't needed fixing. If a
+      // future character combines both, the adjacent hit will be missing
+      // this bonus.
       else if (statKey === 'DMG_PERCENT') aiDmgPercent += bonus;
       else if (statKey === 'ATK_PERCENT') aiAtkPercentBonus += bonus;
     };
@@ -1586,29 +1107,98 @@ function computeScenarioTotalDamage(stats, scenario) {
 
   const effectiveCritRatePercent = baseCritRatePercent + overflowCritRateBonus;
   const effectiveCritDmgPercent = baseCritDmgPercent + overflowCritDmgBonus;
+
+  // Flat, additive Elation-stat bonus (e.g. a light cone's "all allies
+  // +X% Elation" on some trigger) — a straightforward percentage-point
+  // add, same shape as DMG_PERCENT/CRIT_RATE/etc., unlike the
+  // multiplicative-of-self case just below. Applied BEFORE any
+  // %-of-current-Elation multiplier, since a %-of-current mechanic
+  // should read the character's actual total Elation (flat buffs
+  // included), not just their unbuffed base value.
+  const aiElationFlatAddPercent = sumConditionalStat('ELATION_PERCENT_FLAT_ADD');
+
+  // ATK-threshold-to-Elation conversion (e.g. Sparxie's "Sweet! Punchline
+  // Signing": +5% Elation per 100 ATK above 2000, capped at +80%). Unlike
+  // STAT_OVERFLOW_SPLIT (Silver Wolf's Hidden MMR), the input here is the
+  // character's own live ATK stat, not a manually-entered resource-point
+  // count — so it reads `stats.atk` directly rather than a scenario
+  // input field. Uses the same "effective ATK" definition as an
+  // ATK-scaling ability's own damage calc (base ATK x (1 +
+  // aiAtkPercentBonus%)) so a separate ATK_PERCENT conditional correctly
+  // pushes a character over/further past the threshold too.
+  const atkThresholdConditional = matchedAll.find((c) => c.statType === 'ELATION_PERCENT_ATK_THRESHOLD');
+  let aiElationFromAtkThreshold = 0;
+  if (atkThresholdConditional?.atkThreshold && typeof stats.atk === 'number') {
+    const { baseAtk, atkPerUnit, elationPercentPerUnit, capPercent } = atkThresholdConditional.atkThreshold;
+    const effectiveAtkForThreshold = stats.atk * (1 + aiAtkPercentBonus / 100);
+    const unitsOverThreshold = Math.max(0, effectiveAtkForThreshold - baseAtk) / atkPerUnit;
+    aiElationFromAtkThreshold = Math.min(capPercent, unitsOverThreshold * elationPercentPerUnit);
+  }
+
+  // Self-referential Elation bonus — "increases Elation by X% of the
+  // character's OWN current Elation" (e.g. Yaoguang's Zone). This is
+  // multiplicative on her own base Elation, not a flat percentage-point
+  // add like DMG_PERCENT/CRIT_RATE/etc, so it gets the same kind of
+  // dedicated handling STAT_OVERFLOW_SPLIT gets above for its own
+  // non-standard shape, rather than being forced through the ordinary
+  // additive sumConditionalStat path. A character being buffed by their
+  // OWN "all allies" effect isn't a cross-character-buff problem — they
+  // count as one of their own allies — so this fits the existing
+  // single-character model cleanly.
+  // SPD-threshold-to-Elation conversion (e.g. Silver Wolf LV.999's False
+  // Ending Speedrun: at 160+ SPD, +50% Elation, then +2% per SPD point
+  // above 160, up to 100 excess SPD counted). Same live-stat-driven shape
+  // as ELATION_PERCENT_ATK_THRESHOLD above, but with a base % granted
+  // immediately at the threshold rather than scaling purely linearly from
+  // zero, and the excess is capped by a max SPD amount rather than a
+  // total percent cap.
+  const spdThresholdConditional = matchedAll.find((c) => c.statType === 'ELATION_PERCENT_SPD_THRESHOLD');
+  let aiElationFromSpdThreshold = 0;
+  if (spdThresholdConditional?.spdThreshold && typeof stats.spd === 'number') {
+    const { baseSpd, basePercent, spdPerUnit, elationPercentPerUnit, maxExcessSpd } =
+      spdThresholdConditional.spdThreshold;
+    if (stats.spd >= baseSpd) {
+      const excessSpd = Math.min(maxExcessSpd, stats.spd - baseSpd);
+      aiElationFromSpdThreshold = basePercent + (excessSpd / spdPerUnit) * elationPercentPerUnit;
+    }
+  }
+
+  const elationSelfScaledConditional = matchedAll.find((c) => c.statType === 'ELATION_PERCENT_OF_SELF');
+  let effectiveElationPercent =
+    elationPercent + aiElationFlatAddPercent + aiElationFromAtkThreshold + aiElationFromSpdThreshold;
+  if (elationSelfScaledConditional) {
+    const stacks = resolveConditionalStacks(elationSelfScaledConditional);
+    const selfScaleRate = elationSelfScaledConditional.valuesByStack[stacks - 1] || 0;
+    const preSelfScalePercent = effectiveElationPercent;
+    effectiveElationPercent = preSelfScalePercent * (1 + selfScaleRate / 100);
+    if (calcElationBreakdownOut) {
+      calcElationBreakdownOut.ratePercent = selfScaleRate;
+      calcElationBreakdownOut.beforePercent = preSelfScalePercent;
+      calcElationBreakdownOut.addedPercent = effectiveElationPercent - preSelfScalePercent;
+      calcElationBreakdownOut.totalPercent = effectiveElationPercent;
+    }
+  }
+
+  const scalingKeyAuthored = calcScalingStat ? calcScalingStat.toLowerCase() : '';
+  const rawScalingValue = scalingKeyAuthored ? stats[scalingKeyAuthored] : null;
   const effectiveScalingValue =
-    scalingKey === 'atk' && typeof scalingValue === 'number'
-      ? scalingValue * (1 + aiAtkPercentBonus / 100)
-      : scalingValue;
+    scalingKeyAuthored === 'atk' && typeof rawScalingValue === 'number'
+      ? rawScalingValue * (1 + aiAtkPercentBonus / 100)
+      : rawScalingValue;
 
-  const selectedHitIndex = hitIndices.includes(calcParamIndex) ? calcParamIndex : hitIndices[0];
+  const brokenMultiplier = calcEnemyBroken ? 1.0 : 0.9;
 
-  const baseMultiplier = levelParams[selectedHitIndex];
-  const escalatingMultipliers = getEscalatingMultipliers(resolvedSkillDesc);
-  const activationMultipliers = escalatingMultipliers ? [baseMultiplier, ...escalatingMultipliers] : null;
-  const selectedActivationMultiplier = activationMultipliers
-    ? activationMultipliers[Math.min(calcActivationIndex, activationMultipliers.length - 1)]
-    : baseMultiplier;
-
-  const computeHitDamage = (multiplierFraction, extraDmgPercent = 0) => {
-    const brokenMultiplier = calcEnemyBroken ? 1.0 : 0.9;
-
+  // Shared by the main hit and (if this is a Blast-pattern ability) the
+  // adjacent-target hits below — everything except the multiplier itself
+  // is identical between them, so this avoids duplicating the whole
+  // computeDamage/computeElationDamage call shape twice.
+  function computeAuthoredHit(multiplierPercent, dmgPercentOverride = aiDmgPercent) {
     if (isElation) {
       return computeElationDamage({
-        abilityMultiplierPercent: (multiplierFraction || 0) * 100,
+        abilityMultiplierPercent: multiplierPercent,
         characterLevel: activeCharacter.level,
         enemyLevel: calcEnemyLevel,
-        elationPercent,
+        elationPercent: effectiveElationPercent,
         merrymakePercent: calcMerrymakePercent,
         punchlineValue: calcPunchlineValue,
         usingCertifiedBanger: calcUsingCertifiedBanger,
@@ -1620,47 +1210,62 @@ function computeScenarioTotalDamage(stats, scenario) {
         brokenMultiplier,
       });
     }
+    if (effectiveScalingValue == null) return null;
+    return computeDamage({
+      scalingStatValue: effectiveScalingValue,
+      skillMultiplierPercent: multiplierPercent,
+      characterLevel: activeCharacter.level,
+      enemyLevel: calcEnemyLevel,
+      enemyResPercent: effectiveEnemyRes,
+      defShredPercent: effectiveDefShred,
+      elementalDmgPercent: elementalDmgPercent + allDmgPercent + dmgPercentOverride,
+      critRatePercent: effectiveCritRatePercent,
+      critDmgPercent: effectiveCritDmgPercent,
+      vulnerabilityPercent: aiVulnerabilityPercent,
+      brokenMultiplier,
+    });
+  }
 
-    return effectiveScalingValue != null
-      ? computeDamage({
-          scalingStatValue: effectiveScalingValue,
-          skillMultiplierPercent: (multiplierFraction || 0) * 100,
-          characterLevel: activeCharacter.level,
-          enemyLevel: calcEnemyLevel,
-          enemyResPercent: effectiveEnemyRes,
-          defShredPercent: effectiveDefShred,
-          elementalDmgPercent: elementalDmgPercent + allDmgPercent + aiDmgPercent + extraDmgPercent,
-          critRatePercent: effectiveCritRatePercent,
-          critDmgPercent: effectiveCritDmgPercent,
-          vulnerabilityPercent: aiVulnerabilityPercent,
-          brokenMultiplier,
-        })
-      : null;
-  };
+  const hitDamage = computeAuthoredHit(
+    calcAuthoredMultiplierPercent +
+      (calcAuthoredMultiplierPerElationPercent
+        ? calcAuthoredMultiplierPerElationPercent * effectiveElationPercent
+        : 0)
+  );
+  if (hitDamage == null) return null;
 
-  const damage = computeHitDamage(selectedActivationMultiplier);
-  if (damage == null) return null;
+  // Blast: main target takes the full hit above, and up to 2 adjacent
+  // targets each take a separately-declared reduced hit — a real,
+  // confirmed HSR mechanic (Blast always hits exactly 3 targets when
+  // enough enemies are present: 1 main + 2 adjacent), not a guess. The
+  // adjacent count is capped by how many OTHER enemies actually exist,
+  // so a single-target scenario correctly gets zero adjacent damage.
+  let totalDamage = hitDamage;
+  if (calcAuthoredBlastAdjacentMultiplierPercent != null) {
+    const adjacentTargetCount = Math.max(0, Math.min(2, calcEnemyCount - 1));
+    if (adjacentTargetCount > 0) {
+      // aiDmgPercentAdjacentPortion is the FULL adjacent-hit sum already
+      // (unrestricted conditionals + ADJACENT-restricted ones) — do not
+      // add aiDmgPercent on top, that would double-count anything without
+      // a restrictedToBlastPortion (i.e. every pre-existing conditional).
+      const adjacentHit = computeAuthoredHit(
+        calcAuthoredBlastAdjacentMultiplierPercent,
+        aiDmgPercentAdjacentPortion
+      );
+      if (adjacentHit != null) totalDamage += adjacentHit * adjacentTargetCount;
+    }
+  }
 
-  const instancedHitDamage = instancedHitInfo ? computeHitDamage(instancedHitInfo.perInstancePercent) : null;
-  const instancedHitTotal = instancedHitDamage != null ? instancedHitDamage * instancedHitInfo.instanceCount : null;
-
-  // Blast-pattern abilities (main target + adjacent targets) only ever
-  // hit the main target plus up to 2 enemies adjacent to it — 3 targets
-  // total — no matter how many enemies are actually on the field, since
-  // "adjacent" is a fixed positional relationship, not a count that
-  // scales with battlefield size. Enemies hit beyond that never take the
-  // adjacent-hit damage, so this caps the adjacent multiplier separately
-  // from the overall battlefield cap (MAX_BATTLEFIELD_ENEMIES) below,
-  // which still governs "hits all enemies" abilities.
-  const MAX_BLAST_ADJACENT_ENEMIES = 2;
-  const hitsAllEnemies = isAoEAllEnemiesAbility(skill.desc);
-  const baseTotalDamage = hasMultipleHitValues
-    ? (computeHitDamage(levelParams[hitIndices[0]]) || 0) +
-      (computeHitDamage(levelParams[hitIndices[1]]) || 0) *
-        Math.max(0, Math.min(MAX_BLAST_ADJACENT_ENEMIES, calcEnemyCount - 1))
-    : damage * (hitsAllEnemies ? calcEnemyCount : 1);
-
-  return instancedHitTotal != null ? baseTotalDamage + instancedHitTotal : baseTotalDamage;
+  // averagedAcrossEnemies (Fribbels' formula shape, e.g. Silver Wolf's
+  // Bonus Stage) DIVIDES by enemy count; hitsAllEnemies (ordinary true
+  // AoE, e.g. "deals X% DMG to all enemies" with no "split evenly"
+  // language) MULTIPLIES. The three flags (Blast/averaged/hitsAll) are mutually exclusive in
+  // practice; if more than one were somehow set, Blast's adjacent-target
+  // total is computed first, then divided or multiplied same as a plain
+  // hit would be.
+  if (calcAuthoredAveragedAcrossEnemies) return totalDamage / Math.max(1, calcEnemyCount);
+  if (calcAuthoredHitsAllEnemies) return totalDamage * calcEnemyCount;
+  return totalDamage;
 }
 
 // Swaps a character's authored rotation entries for their "enhanced
@@ -1724,11 +1329,10 @@ function buildEffectiveRotation(baseRotation, abilities, usingEnhancedState) {
   return effective;
 }
 
-// Sums damage across a full rotation: each row supplies its own ability
-// selection (skillId/skillLevel/paramIndex/activationIndex) plus its
-// classification (damageType/scalingStat/nonStatValue) from that row's own
-// AI detection, while everything else (enemy config, Elation-wide fields,
-// AI/manual conditionals) is shared across the whole rotation via
+// Sums damage across a full rotation: each row supplies its own authored
+// multiplier plus its classification (damageType/scalingStat) from the
+// character file, while everything else (enemy config, Elation-wide fields,
+// authored conditionals) is shared across the whole rotation via
 // `globalScenario`. Reuses computeScenarioTotalDamage as the per-row engine
 // rather than duplicating its math — a rotation is just that function
 // called once per row, multiplied by how many times that row occurs in one
@@ -1772,27 +1376,10 @@ function computeRotationTotalDamage(stats, rows, globalScenario) {
     const elationBreakdownOut = {};
     const rowScenario = {
       ...globalScenario,
-      calcSkillId: row.skillId,
-      calcSkillLevel: row.skillLevel,
-      calcActivationIndex: row.activationIndex,
-      calcParamIndex: row.paramIndex,
       calcDamageType: row.damageType,
       calcScalingStat: row.scalingStat,
-      calcNonStatValue: row.nonStatValue,
-      // Per-row rather than shared via globalScenario — two rows both using
-      // "Bloom! Winner Takes All" (or any other per-hit-target-stacking
-      // ability) should be able to represent different trigger counts, not
-      // mirror the same number.
-      calcStackingTriggers: row.stackingTriggers ?? 0,
       calcSourceAbilityTriggerCounts: sourceAbilityTriggerCounts,
       calcAbilityCastCounts: abilityCastCounts,
-      // Per-row like calcStackingTriggers above — two rows using the same
-      // self-buffing ability (e.g. Archer's Skill cast twice in one turn)
-      // represent different points in the stacking sequence, not the same
-      // stack count.
-      calcSelfBuffCastNumber: row.selfBuffCastNumber ?? 1,
-      // Only present on rows built from a hand-authored rotation — see
-      // the "AUTHORED ROW PATH" branch in computeScenarioTotalDamage.
       calcAuthoredMultiplierPercent: row.authoredMultiplierPercent ?? null,
       // Stripped of its "TypeText: " prefix here (matching-only use) so it
       // compares correctly against restrictedToAbilityName, which is
@@ -1983,11 +1570,9 @@ export default function ProfilePage() {
       }))
       .filter((a) => a.description)
       // Characters with multiple skill IDs sharing a name (e.g. Castorice's
-      // escalating-multiplier variants, already handled separately by
-      // getEscalatingMultipliers() for the multiplier selector) otherwise
-      // send byte-identical description text multiple times, wasting
-      // prompt budget on redundant content instead of leaving that room
-      // for effects that are actually distinct.
+      // per-cast variants) otherwise send byte-identical description text
+      // multiple times, wasting prompt budget on redundant content instead
+      // of leaving that room for effects that are actually distinct.
       .filter((a) => {
         if (seenDescriptions.has(a.description)) return false;
         seenDescriptions.add(a.description);
@@ -2109,12 +1694,6 @@ export default function ProfilePage() {
   }
 
   function handleRotationRowLevelChange(id, level) {
-    // Level only changes the skill's numeric param values, never its
-    // scaling stat or damage type — no need to re-run detection against
-    // Groq for something level-invariant. Still relevant for authored
-    // rows too (e.g. testing a lower trace/eidolon level), since the
-    // authored multiplier is flat but the level still feeds
-    // characterLevel-dependent parts of the damage formula elsewhere.
     updateRotationRow(id, { skillLevel: level });
   }
 
@@ -2322,8 +1901,6 @@ export default function ProfilePage() {
                 abilityMatchName: effectiveMatchName,
                 skillId: null,
                 skillLevel: null,
-                paramIndex: 0,
-                activationIndex: 0,
                 countPerRotation: entry.countPerRotation,
                 // Lets a character file's default rotation pre-seed a
                 // starting trigger count (e.g. Sparxie's Engagement
@@ -2334,12 +1911,8 @@ export default function ProfilePage() {
                 labelIsCustom: false,
                 damageType: triggerData.damageType === 'ELATION' ? DamageType.ELATION : DamageType.STANDARD,
                 scalingStat: triggerData.scalingStat === 'NONE' ? '' : triggerData.scalingStat || '',
-                scalingStatus: 'done',
-                scalingError: '',
-                nonStatValue: 0,
                 damageSourceName: null,
                 dealsNoDirectDamage: false,
-                selfBuffCastNumber: 1,
                 authoredMultiplierPercent: resolveAuthoredMultiplierPercent(triggerData, triggerLevel),
                 // Defaults to ULT only for backward compatibility with
                 // existing attached triggers that don't declare their own
@@ -2391,20 +1964,14 @@ export default function ProfilePage() {
               abilityMatchName: matchName,
               skillId: skillId || null,
               skillLevel: level,
-              paramIndex: 0,
-              activationIndex: 0,
               countPerRotation: entry.countPerRotation,
               stackingTriggers: entry.stackingTriggers ?? 0,
               label: entry.abilityName,
               labelIsCustom: false,
               damageType: abilityData?.damageType === 'ELATION' ? DamageType.ELATION : DamageType.STANDARD,
               scalingStat: abilityData?.scalingStat === 'NONE' ? '' : abilityData?.scalingStat || '',
-              scalingStatus: 'done',
-              scalingError: '',
-              nonStatValue: 0,
               damageSourceName: abilityData?.damageSourceName || null,
               dealsNoDirectDamage: !!abilityData?.dealsNoDirectDamage,
-              selfBuffCastNumber: 1,
               authoredMultiplierPercent: resolveAuthoredMultiplierPercent(abilityData, level),
               authoredAbilityType: abilityData?.abilityType || null,
               averagedAcrossEnemies: !!abilityData?.averagedAcrossEnemies,
@@ -2715,7 +2282,6 @@ export default function ProfilePage() {
                   const globalScenario = {
                     activeCharacter,
                     characterSkills,
-                    skillIds: activeInfo?.skills || [],
                     skillTrees,
                     calcEnemyLevel,
                     calcEnemyRes,
@@ -2931,33 +2497,6 @@ export default function ProfilePage() {
               })()}
 
               {showDamageCalc && (() => {
-                const skillIds = characterNames[activeCharacter.avatarId]?.skills || [];
-                const selectableIds = skillIds.filter((id) => isSelectableAttack(characterSkills[id]));
-
-                // Some skills (e.g. Castorice's Memosprite Skill, castable
-                // up to 3 times with an escalating multiplier each time)
-                // are listed as multiple separate skill IDs sharing the
-                // same name and type_text — one per activation count,
-                // rather than one skill with a toggle. Group those
-                // together so the dropdown shows one entry, with a
-                // separate "Activation" selector on the row for which
-                // cast to view.
-                const activationGroups = {};
-                selectableIds.forEach((id) => {
-                  const s = characterSkills[id];
-                  const key = `${s.name}__${s.type_text}`;
-                  (activationGroups[key] = activationGroups[key] || []).push(id);
-                });
-                const dedupedSelectableIds = [];
-                const seenGroupKeys = new Set();
-                selectableIds.forEach((id) => {
-                  const s = characterSkills[id];
-                  const key = `${s.name}__${s.type_text}`;
-                  if (seenGroupKeys.has(key)) return;
-                  seenGroupKeys.add(key);
-                  dedupedSelectableIds.push(id);
-                });
-
                 const elementDmgType = ELEMENT_DMG_TYPE[activeInfo?.element];
 
                 const resolvedAuthoredConditionals = authoredConditionals.map((c) =>
@@ -2967,35 +2506,14 @@ export default function ProfilePage() {
                   conditionalTraceIsUnlocked(c, getUnlockedTraceNames(activeCharacter, skillTrees))
                 );
 
-                // Checked against rows actually present in the current rotation,
-                // NOT every ability in the character's full kit. A
-                // conditional whose sourceAbilityName matches a real kit
-                // ability that was deliberately left out of an authored
-                // rotation (e.g. Yaoguang's Skill, or Silver Wolf's Talent)
-                // must NOT be excluded here — it has nowhere to display
-                // inline in that case, and would otherwise vanish from the
-                // UI entirely instead of falling back to the general list.
-                const selfBuffingConditionalNames = new Set(
-                  allConditionals
-                    .filter((c) =>
-                      rotationRows.some((r) => {
-                        const s = characterSkills[r.skillId];
-                        return s && isSelfBuffingSkillConditional(c, s.name, s.type_text);
-                      })
-                    )
-                    .map((c) => c.name)
-                );
-
-                // Same idea again, for a hand-authored conditional whose
-                // sourceAbilityName matches a DIFFERENT row present in the
-                // rotation (Sparxie's Engagement Farming -> Bloom!) rather
-                // than the same row. These get an inline trigger-count
-                // input on their SOURCE row (see hasAuthoredTriggerSourceInput
-                // in getRowMeta) instead of the generic dropdown, so they're
-                // excluded here the same way self-buffing ones are — but
-                // only when that source row is actually present; otherwise
-                // there's nowhere for it to show inline and it must fall
-                // back to the general list.
+                // A hand-authored conditional whose sourceAbilityName matches
+                // a row present in the rotation (e.g. Sparxie's Engagement
+                // Farming -> Bloom!) gets an inline trigger-count input on
+                // that SOURCE row (see hasAuthoredTriggerSourceInput in
+                // getRowMeta) instead of the generic dropdown, so it's
+                // excluded here — but only when that source row is actually
+                // present; otherwise there's nowhere for it to show inline
+                // and it must fall back to the general list.
                 const authoredTriggerSourceConditionalNames = new Set(
                   allConditionals
                     .filter(
@@ -3108,25 +2626,6 @@ export default function ProfilePage() {
 
                 const hasElationRow = rotationRows.some((r) => r.damageType === DamageType.ELATION);
 
-                // Some abilities' own DMG multiplier escalates per cast
-                // within one turn (e.g. Castorice's Breath Scorches the
-                // Shadow), and a sibling ability of the same type_text can
-                // follow it in that same turn (e.g. Claw Splits the Veil,
-                // Wings Sweep the Ruins) inheriting whatever per-turn
-                // conditional bonus the escalating one has been stacking
-                // (e.g. a Trace like Where the West Wind Dwells). All of
-                // that family shares one "how far into this turn" selector
-                // rather than each row picking its own independently —
-                // sized to whichever is larger, the ability's own number of
-                // escalation stages or the linked conditional's max stacks.
-                const breathLinkedGroup = findBreathLinkedGroup(characterSkills, skillIds);
-                const linkedTraceConditional = findLinkedTraceConditional(
-                  allConditionals,
-                  breathLinkedGroup?.name
-                );
-                let breathMaxCasts = breathLinkedGroup ? breathLinkedGroup.escalatingLength + 1 : 1;
-                if (linkedTraceConditional) breathMaxCasts = Math.max(breathMaxCasts, linkedTraceConditional.maxStacks);
-
                 // Display-only estimate of effective enemy RES/DEF-shred —
                 // sums RES_PEN/DEF_PEN across every currently-added
                 // conditional regardless of which row(s) it actually
@@ -3145,66 +2644,13 @@ export default function ProfilePage() {
                 const effectiveEnemyRes = calcEnemyRes - aiResPenPercent;
                 const effectiveDefShred = calcDefShred + aiDefPenPercent;
 
-                // Per-row derived info (which skill it resolves to, its
-                // level-resolved description, which damage-percent hit
-                // indices it has, whether it has escalating-cast
-                // variants) — mirrors what the old single-ability
-                // calculator computed once globally, scoped per row here
-                // since each row can be a different ability.
+                // Per-row derived info for display: the matching real skill
+                // (for its level cap and description) and any hand-authored
+                // conditionals this row is the trigger SOURCE for.
                 function getRowMeta(row) {
-                  const selectedSkillKey = characterSkills[row.skillId]
-                    ? `${characterSkills[row.skillId].name}__${characterSkills[row.skillId].type_text}`
-                    : null;
-                  const activationVariantIds = selectedSkillKey
-                    ? activationGroups[selectedSkillKey] || [row.skillId]
-                    : [row.skillId];
-                  const skill = characterSkills[activationVariantIds[0]];
+                  const skill = characterSkills[row.skillId];
                   const resolvedDesc = skill ? formatDescPlaceholders(skill.desc, skill.params[row.skillLevel - 1]) : '';
-                  const nonStatScalingLabel = getNonStatScalingLabel(resolvedDesc);
-                  const damagePercentIndices = skill ? getDamagePercentParamIndices(skill.desc) : [];
-                  const hasInstancedHit = skill ? !!getInstancedHitInfo(resolvedDesc) : false;
-                  const hitIndices =
-                    damagePercentIndices.length > 0 ? damagePercentIndices : hasInstancedHit ? [] : [0];
-                  const hasMultipleHitValues = hitIndices.length > 1;
-                  const selectedHitIndex = hitIndices.includes(row.paramIndex) ? row.paramIndex : hitIndices[0];
-                  const levelParams = skill ? skill.params[row.skillLevel - 1] || [] : [];
-                  const baseMultiplier = levelParams[selectedHitIndex];
-                  const escalatingMultipliers = getEscalatingMultipliers(resolvedDesc);
-                  const activationMultipliers = escalatingMultipliers
-                    ? [baseMultiplier, ...escalatingMultipliers]
-                    : null;
-                  const hasMultipleActivations = activationVariantIds.length > 1 && !!activationMultipliers;
 
-                  const isBreathAbility = !!breathLinkedGroup && activationVariantIds[0] === breathLinkedGroup.skillId;
-                  const isBreathSibling =
-                    !!breathLinkedGroup && !isBreathAbility && skill?.type_text === breathLinkedGroup.typeText;
-                  // Authored rows (row.locked) already have their exact
-                  // escalation tier baked into a fixed baseMultiplierPercent
-                  // by hand — e.g. Castorice's Breath Scorches the Shadow
-                  // is authored as 3 separate rows, one per tier, instead
-                  // of one row where the person picks "which cast" via
-                  // this selector. Showing the selector on top of an
-                  // already-fixed authored multiplier would be redundant
-                  // and, worse, misleading (changing it wouldn't do
-                  // anything, since authored damage never reads
-                  // activationIndex at all).
-                  const hasTurnPositionSelector = !row.locked && (isBreathAbility || isBreathSibling);
-
-                  const selfBuffingConditionals = skill
-                    ? allConditionals.filter((c) => isSelfBuffingSkillConditional(c, skill.name, skill.type_text))
-                    : [];
-
-                  // For a conditional whose sourceAbilityName matches THIS
-                  // row's own ability (e.g. Sparxie's "Engagement Farming"
-                  // row is the trigger SOURCE for the DMG% bonus that
-                  // applies to her separate "Bloom! Winner Takes All" row).
-                  // Shows the trigger-count input on the SOURCE row rather
-                  // than the target row, and reuses row.stackingTriggers as
-                  // the stored value — same field the old (now-removed)
-                  // per-hit-stacking mechanism used, just
-                  // matched here via a hand-authored conditional's
-                  // sourceAbilityName instead of the raw-kit-text pattern
-                  // detector.
                   const authoredTriggerSourceConditionals = row.label
                     ? allConditionals.filter(
                         (c) => c.sourceAbilityName === stripAuthoredAbilityTypePrefix(row.label)
@@ -3218,14 +2664,6 @@ export default function ProfilePage() {
                   return {
                     skill,
                     resolvedDesc,
-                    nonStatScalingLabel,
-                    hasMultipleHitValues,
-                    activationMultipliers,
-                    hasMultipleActivations,
-                    isBreathAbility,
-                    isBreathSibling,
-                    hasTurnPositionSelector,
-                    selfBuffingConditionals,
                     hasAuthoredTriggerSourceInput,
                     authoredTriggerSourceConditionals,
                     authoredTriggerSourceMaxStacks,
@@ -3235,7 +2673,6 @@ export default function ProfilePage() {
                 const globalScenario = {
                   activeCharacter,
                   characterSkills,
-                  skillIds,
                   skillTrees,
                   calcEnemyLevel,
                   calcEnemyRes,
@@ -3479,8 +2916,6 @@ export default function ProfilePage() {
                             // needed, same reasoning as the overflow/
                             // threshold statTypes excluded just above.
                             !c.resourceStackThreshold &&
-                            c !== linkedTraceConditional &&
-                            !selfBuffingConditionalNames.has(c.name) &&
                             !authoredTriggerSourceConditionalNames.has(c.name)
                         )
                         .map((c) => (
@@ -3614,29 +3049,6 @@ export default function ProfilePage() {
                               )}
                             </div>
 
-                            {meta.selfBuffingConditionals.length > 0 && (
-                              <div className="compare-form-row authored-conditional-row">
-                                <span className="calc-inline-label">
-                                  {meta.selfBuffingConditionals.map((c) => (
-                                    <span key={c.name}>
-                                      {c.name} <ConditionalHelpTooltip c={c} />
-                                    </span>
-                                  ))}
-                                  — cast # this turn
-                                </span>
-                                <input
-                                  type="number"
-                                  min="1"
-                                  value={row.selfBuffCastNumber ?? 1}
-                                  onChange={(e) =>
-                                    updateRotationRow(row.id, {
-                                      selfBuffCastNumber: Math.max(1, Number(e.target.value) || 1),
-                                    })
-                                  }
-                                />
-                              </div>
-                            )}
-
                             <div className="compare-form-row">
                               <label className="calc-inline-label">
                                 Label
@@ -3666,28 +3078,6 @@ export default function ProfilePage() {
                                 own. Use "Triggers this rotation" below instead, which actually drives the bonus
                                 on whichever ability this triggers.
                               </p>
-                            )}
-
-                            {meta.hasTurnPositionSelector && (
-                              <div className="compare-form-row">
-                                <span className="calc-inline-label">
-                                  {meta.isBreathAbility ? 'Cast' : 'Breaths cast this turn'}
-                                  {linkedTraceConditional && <ConditionalHelpTooltip c={linkedTraceConditional} />}
-                                </span>
-                                <select
-                                  value={row.activationIndex}
-                                  onChange={(e) => updateRotationRow(row.id, { activationIndex: Number(e.target.value) })}
-                                >
-                                  {Array.from(
-                                    { length: meta.isBreathAbility ? breathMaxCasts : breathMaxCasts + 1 },
-                                    (_, i) => (
-                                      <option key={i} value={i}>
-                                        {meta.isBreathAbility ? `Cast ${i + 1}` : i}
-                                      </option>
-                                    )
-                                  )}
-                                </select>
-                              </div>
                             )}
 
                             {meta.hasAuthoredTriggerSourceInput && (() => {
@@ -3776,49 +3166,24 @@ export default function ProfilePage() {
                                   </p>
                                 )}
 
-                                {meta.nonStatScalingLabel ? (
-                                  <div className="compare-form-row">
-                                    <label className="calc-inline-label">
-                                      {meta.nonStatScalingLabel}
-                                      <input
-                                        type="number"
-                                        min="0"
-                                        value={row.nonStatValue}
-                                        onChange={(e) => updateRotationRow(row.id, { nonStatValue: Number(e.target.value) || 0 })}
-                                      />
-                                    </label>
-                                  </div>
+                                {row.damageType === DamageType.ELATION ? (
+                                  <p className="compare-ocr-note ai-disclaimer">
+                                    ⚠️ Elation DMG — uses the shared Punchline/Merrymake values
+                                    above instead of a scaling stat.
+                                  </p>
                                 ) : (
-                                  <>
-                                    {row.scalingStatus === 'loading' && (
-                                      <p className="compare-ocr-note">Detecting damage type...</p>
-                                    )}
-                                    {row.scalingStatus === 'error' && (
-                                      <p className="compare-ocr-note compare-ocr-note-warn">
-                                        {row.scalingError || "Couldn't reach the detection service"} — pick the
-                                        scaling stat manually (defaults to standard damage).
-                                      </p>
-                                    )}
-                                    {row.damageType === DamageType.ELATION ? (
-                                      <p className="compare-ocr-note ai-disclaimer">
-                                        ⚠️ Elation DMG detected — uses the shared Punchline/Merrymake values
-                                        above instead of a scaling stat.
-                                      </p>
-                                    ) : (
-                                      <div className="compare-form-row">
-                                        <span className="calc-inline-label">Scaling stat</span>
-                                        <select
-                                          value={row.scalingStat}
-                                          onChange={(e) => updateRotationRow(row.id, { scalingStat: e.target.value })}
-                                        >
-                                          <option value="">None detected</option>
-                                          <option value="ATK">ATK</option>
-                                          <option value="DEF">DEF</option>
-                                          <option value="HP">HP</option>
-                                        </select>
-                                      </div>
-                                    )}
-                                  </>
+                                  <div className="compare-form-row">
+                                    <span className="calc-inline-label">Scaling stat</span>
+                                    <select
+                                      value={row.scalingStat}
+                                      onChange={(e) => updateRotationRow(row.id, { scalingStat: e.target.value })}
+                                    >
+                                      <option value="">None</option>
+                                      <option value="ATK">ATK</option>
+                                      <option value="DEF">DEF</option>
+                                      <option value="HP">HP</option>
+                                    </select>
+                                  </div>
                                 )}
                               </>
                             )}
