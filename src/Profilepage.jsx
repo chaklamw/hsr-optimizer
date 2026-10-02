@@ -142,6 +142,29 @@ const ELEMENT_DMG_TYPE = {
   Imaginary: 'ImaginaryAddedRatio',
 };
 
+const STAT_TYPE_DESCRIPTIONS = {
+  DMG_PERCENT: 'Increases DMG dealt',
+  RES_PEN: "Reduces the enemy's elemental RES",
+  DEF_PEN: "Reduces the enemy's effective DEF",
+  CRIT_RATE: 'Increases CRIT Rate',
+  CRIT_DMG: 'Increases CRIT DMG',
+  ATK_PERCENT: 'Increases ATK (only matters if the skill scales off ATK)',
+  VULNERABILITY: 'Increases DMG the target takes from all sources',
+  ELATION_PERCENT_FLAT_ADD: "Increases the character's Elation stat by a flat amount",
+  ELATION_PERCENT_OF_SELF: "Increases the character's Elation stat by a % of their own current Elation",
+  ELATION_PERCENT_ATK_THRESHOLD: "Converts ATK above a threshold into Elation, capped",
+  ELATION_PERCENT_SPD_THRESHOLD:
+    "Grants a base Elation % once SPD reaches a threshold, plus more per SPD point above it, capped by a max excess SPD",
+  OTHER: "Doesn't map to a stat this calculator currently applies to damage",
+};
+
+const STAT_TYPE_SHORT_LABELS = {
+  DMG_PERCENT: 'DMG%',
+  CRIT_RATE: 'CRIT Rate',
+  CRIT_DMG: 'CRIT DMG',
+  ATK_PERCENT: 'ATK%',
+};
+
 // Reverse lookup: given a label, it will return the property id that matches the label
 // e.g Crit Rate -> CriticalChanceBase. This is being used in situations such as OCR scanning
 // in which we scan stats from relics and we need to turn it back into the property id.
@@ -514,32 +537,6 @@ function conditionalAppliesToSkill(conditional, skillTypeText, skillName, resolv
   }
   return conditional.appliesToAbility === abilityType;
 }
-
-const STAT_TYPE_DESCRIPTIONS = {
-  DMG_PERCENT: 'Increases DMG dealt',
-  RES_PEN: "Reduces the enemy's elemental RES",
-  DEF_PEN: "Reduces the enemy's effective DEF",
-  CRIT_RATE: 'Increases CRIT Rate',
-  CRIT_DMG: 'Increases CRIT DMG',
-  ATK_PERCENT: 'Increases ATK (only matters if the skill scales off ATK)',
-  VULNERABILITY: 'Increases DMG the target takes from all sources',
-  ELATION_PERCENT_FLAT_ADD: "Increases the character's Elation stat by a flat amount",
-  ELATION_PERCENT_OF_SELF: "Increases the character's Elation stat by a % of their own current Elation",
-  ELATION_PERCENT_ATK_THRESHOLD: "Converts ATK above a threshold into Elation, capped",
-  ELATION_PERCENT_SPD_THRESHOLD:
-    "Grants a base Elation % once SPD reaches a threshold, plus more per SPD point above it, capped by a max excess SPD",
-  OTHER: "Doesn't map to a stat this calculator currently applies to damage",
-};
-
-// Compact names for STAT_OVERFLOW_SPLIT display (checkbox label, live
-// preview) — STAT_TYPE_DESCRIPTIONS above is too verbose ("Increases CRIT
-// Rate") for an inline "X% -> Y%" readout.
-const STAT_TYPE_SHORT_LABELS = {
-  DMG_PERCENT: 'DMG%',
-  CRIT_RATE: 'CRIT Rate',
-  CRIT_DMG: 'CRIT DMG',
-  ATK_PERCENT: 'ATK%',
-};
 
 // The tooltip used to be an absolutely-positioned child of the "?" icon.
 // That's fine on its own, but when the icon sits inside a scrollable
