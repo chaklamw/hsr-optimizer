@@ -165,6 +165,15 @@ const STAT_TYPE_SHORT_LABELS = {
   ATK_PERCENT: 'ATK%',
 };
 
+const TYPE_TEXT_TO_ABILITY = {
+  'Basic ATK': 'BASIC',
+  Skill: 'SKILL',
+  Ultimate: 'ULT',
+  Talent: 'FUA',
+  'Memosprite Skill': 'SKILL',
+  'Elation Skill': 'SKILL',
+};
+
 // Reverse lookup: given a label, it will return the property id that matches the label
 // e.g Crit Rate -> CriticalChanceBase. This is being used in situations such as OCR scanning
 // in which we scan stats from relics and we need to turn it back into the property id.
@@ -476,23 +485,6 @@ async function extractConditionals(characterName, abilities) {
     unsupportedEquipment: data.unsupportedEquipment || [],
   };
 }
-
-// Maps the ability type text StarRailRes uses to the same enum the
-// extraction endpoint returns, so an authored conditional can be
-// matched against whichever skill is currently selected in the calculator.
-const TYPE_TEXT_TO_ABILITY = {
-  'Basic ATK': 'BASIC',
-  Skill: 'SKILL',
-  Ultimate: 'ULT',
-  Talent: 'FUA',
-  // Memosprite Skill (e.g. Castorice's Netherwing) and Elation Skill
-  // (Path of Elation characters) are both skill-type actions as far as the
-  // extraction endpoint's VALID_ABILITY_TARGETS enum is concerned — the AI
-  // extractor never returns anything more specific than 'SKILL' for them,
-  // so a conditional scoped to 'SKILL' should still match these.
-  'Memosprite Skill': 'SKILL',
-  'Elation Skill': 'SKILL',
-};
 
 // Authored rotation-row ability keys follow the "TypeText: Name" convention
 // (e.g. 'Basic ATK: Bloom! Winner Takes All') documented throughout the
