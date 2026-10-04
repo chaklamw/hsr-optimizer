@@ -486,16 +486,11 @@ async function extractConditionals(characterName, abilities) {
   };
 }
 
-// Authored rotation-row ability keys follow the "TypeText: Name" convention
-// (e.g. 'Basic ATK: Bloom! Winner Takes All') documented throughout the
-// character files, but restrictedToAbilityName is always written as the
-// BARE name — matching the convention for real (non-authored) abilities,
-// where skill.name from characterSkills is already bare. Strips the
-// leading "TypeText: " prefix so authored rows compare on equal footing
-// with real ones. Uses the first colon only (not a global strip), since an
-// ability's own real name can itself contain a colon (e.g. "Elation Skill:
-// Signal Overflow: The Great Encore!" -> "Signal Overflow: The Great
-// Encore!", not just "Signal Overflow").
+// Ability naming convention follows 'abilityType: abilityName' so this function
+// takes the full text and strips abilityType and returns abilityName as long
+// as abilityName exists. If it doesn't then it returns 'abilityType:'. Even 
+// in the case with just 'abilityType: ', it will return the leading white space.
+// If abilityType doesn't exist, then it will return the label.
 function stripAuthoredAbilityTypePrefix(label) {
   if (typeof label !== 'string') return label;
   const match = label.match(/^[^:]+:\s*(.+)$/);
