@@ -497,28 +497,25 @@ function stripAuthoredAbilityTypePrefix(label) {
   return match ? match[1] : label;
 }
 
+// Function returns a boolean for whether a certain conditional bonus applies
+// to this ability (skillName and resolvedAbilityType).
+// First checks if the conditional has a field 'restrictedToAbilityName' and
+// if it does, returns a boolean on whether they match
+// If it doesn't have a 'restrictedToAbilityName', then it checks whether
+// that conditional applies to all abilities. If it does, returns true.
+// Otherwise, looks at what kind of ability we are looking at.
+// If the conditional applies to multiple abilities (an array), then
+// returns a boolean on whether that conditional includes our current 
+// abilityType. If the conditional applies to a certain ability type, then it 
+// returns a boolean on whether our current abilityType matches the conditional. 
 function conditionalAppliesToSkill(conditional, skillTypeText, skillName, resolvedAbilityType) {
-  // A conditional whose bonus is scoped to one specific named ability
-  // variant (e.g. Sparxie's "Bloom! Winner Takes All", an enhanced Basic
-  // ATK that shares type_text "Basic ATK" with her ordinary Basic ATK)
-  // must match that exact ability, not just its broad type — otherwise a
-  // bonus meant only for the enhanced attack silently also applies to the
-  // un-enhanced one. This check runs before the ALL/type-text checks below
-  // since it's strictly narrower than either of them.
   if (conditional.restrictedToAbilityName) {
     return conditional.restrictedToAbilityName === skillName;
   }
+
   if (conditional.appliesToAbility === 'ALL') return true;
-  // resolvedAbilityType is passed directly for authored rows (their
-  // abilityType comes straight from the character file, e.g. 'BASIC' or
-  // 'ELATION_SKILL') rather than derived from real kit type_text — those
-  // rows don't have a type_text to look up in the first place.
+
   const abilityType = resolvedAbilityType || TYPE_TEXT_TO_ABILITY[skillTypeText];
-  // appliesToAbility is usually a single ability-type string, but some real
-  // kits/equipment genuinely buff more than one ability type at once (e.g.
-  // a light cone passive boosting both Skill and Ultimate DMG) — for those,
-  // authored entries can pass an array instead of picking one and silently
-  // dropping the other.
   if (Array.isArray(conditional.appliesToAbility)) {
     return conditional.appliesToAbility.includes(abilityType);
   }
