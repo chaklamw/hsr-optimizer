@@ -174,6 +174,9 @@ const TYPE_TEXT_TO_ABILITY = {
   'Elation Skill': 'SKILL',
 };
 
+const TOOLTIP_WIDTH = 280;
+const TOOLTIP_VIEWPORT_MARGIN = 12;
+
 // Reverse lookup: given a label, it will return the property id that matches the label
 // e.g Crit Rate -> CriticalChanceBase. This is being used in situations such as OCR scanning
 // in which we scan stats from relics and we need to turn it back into the property id.
@@ -521,22 +524,6 @@ function conditionalAppliesToSkill(conditional, skillTypeText, skillName, resolv
   }
   return conditional.appliesToAbility === abilityType;
 }
-
-// The tooltip used to be an absolutely-positioned child of the "?" icon.
-// That's fine on its own, but when the icon sits inside a scrollable
-// container (the damage calculator's conditional bonuses list), an
-// absolutely-positioned descendant that pokes past the container's right
-// edge expands that container's scrollable content area — so the whole
-// menu picked up an unwanted horizontal scrollbar just because one tooltip
-// happened to render near the edge.
-//
-// Rendering the tooltip through a portal into document.body sidesteps that
-// entirely: it's laid out relative to the viewport, not the scrolling
-// menu, so it can never affect the menu's scroll dimensions. We measure
-// the icon's position on hover/focus and clamp the tooltip's horizontal
-// position so it always stays fully within the viewport.
-const TOOLTIP_WIDTH = 280;
-const TOOLTIP_VIEWPORT_MARGIN = 12;
 
 function ConditionalHelpTooltip({ c }) {
   const iconRef = useRef(null);
