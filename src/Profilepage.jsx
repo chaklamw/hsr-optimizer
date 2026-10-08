@@ -142,6 +142,32 @@ const ELEMENT_DMG_TYPE = {
   Imaginary: 'ImaginaryAddedRatio',
 };
 
+const STAT_TYPE_DESCRIPTIONS = {
+  DMG_PERCENT: 'Increases DMG dealt',
+  RES_PEN: "Reduces the enemy's elemental RES",
+  DEF_PEN: "Reduces the enemy's effective DEF",
+  CRIT_RATE: 'Increases CRIT Rate',
+  CRIT_DMG: 'Increases CRIT DMG',
+  ATK_PERCENT: 'Increases ATK (only matters if the skill scales off ATK)',
+  VULNERABILITY: 'Increases DMG the target takes from all sources',
+  ELATION_PERCENT_FLAT_ADD: "Increases the character's Elation stat by a flat amount",
+  ELATION_PERCENT_OF_SELF: "Increases the character's Elation stat by a % of their own current Elation",
+  ELATION_PERCENT_ATK_THRESHOLD: "Converts ATK above a threshold into Elation, capped",
+  ELATION_PERCENT_SPD_THRESHOLD:
+    "Grants a base Elation % once SPD reaches a threshold, plus more per SPD point above it, capped by a max excess SPD",
+  OTHER: "Doesn't map to a stat this calculator currently applies to damage",
+};
+
+const STAT_TYPE_SHORT_LABELS = {
+  DMG_PERCENT: 'DMG%',
+  CRIT_RATE: 'CRIT Rate',
+  CRIT_DMG: 'CRIT DMG',
+  ATK_PERCENT: 'ATK%',
+};
+
+const TOOLTIP_WIDTH = 280;
+const TOOLTIP_VIEWPORT_MARGIN = 12;
+
 // Reverse lookup: given a label, it will return the property id that matches the label
 // e.g Crit Rate -> CriticalChanceBase. This is being used in situations such as OCR scanning
 // in which we scan stats from relics and we need to turn it back into the property id.
@@ -471,92 +497,43 @@ const TYPE_TEXT_TO_ABILITY = {
   'Elation Skill': 'SKILL',
 };
 
-// Authored rotation-row ability keys follow the "TypeText: Name" convention
-// (e.g. 'Basic ATK: Bloom! Winner Takes All') documented throughout the
-// character files, but restrictedToAbilityName is always written as the
-// BARE name — matching the convention for real (non-authored) abilities,
-// where skill.name from characterSkills is already bare. Strips the
-// leading "TypeText: " prefix so authored rows compare on equal footing
-// with real ones. Uses the first colon only (not a global strip), since an
-// ability's own real name can itself contain a colon (e.g. "Elation Skill:
-// Signal Overflow: The Great Encore!" -> "Signal Overflow: The Great
-// Encore!", not just "Signal Overflow").
+// Ability naming convention follows 'abilityType: abilityName' so this function
+// takes the full text and strips abilityType and returns abilityName as long
+// as abilityName exists. If it doesn't then it returns 'abilityType:'. Even 
+// in the case with just 'abilityType: ', it will return the leading white space.
+// If abilityType doesn't exist, then it will return the label.
 function stripAuthoredAbilityTypePrefix(label) {
   if (typeof label !== 'string') return label;
   const match = label.match(/^[^:]+:\s*(.+)$/);
   return match ? match[1] : label;
 }
 
+// Function returns a boolean for whether a certain conditional bonus applies
+// to this ability (skillName and resolvedAbilityType).
+// First checks if the conditional has a field 'restrictedToAbilityName' and
+// if it does, returns a boolean on whether they match
+// If it doesn't have a 'restrictedToAbilityName', then it checks whether
+// that conditional applies to all abilities. If it does, returns true.
+// Otherwise, looks at what kind of ability we are looking at.
+// If the conditional applies to multiple abilities (an array), then
+// returns a boolean on whether that conditional includes our current 
+// abilityType. If the conditional applies to a certain ability type, then it 
+// returns a boolean on whether our current abilityType matches the conditional. 
 function conditionalAppliesToSkill(conditional, skillTypeText, skillName, resolvedAbilityType) {
-  // A conditional whose bonus is scoped to one specific named ability
-  // variant (e.g. Sparxie's "Bloom! Winner Takes All", an enhanced Basic
-  // ATK that shares type_text "Basic ATK" with her ordinary Basic ATK)
-  // must match that exact ability, not just its broad type — otherwise a
-  // bonus meant only for the enhanced attack silently also applies to the
-  // un-enhanced one. This check runs before the ALL/type-text checks below
-  // since it's strictly narrower than either of them.
   if (conditional.restrictedToAbilityName) {
     return conditional.restrictedToAbilityName === skillName;
   }
+
   if (conditional.appliesToAbility === 'ALL') return true;
-  // resolvedAbilityType is passed directly for authored rows (their
-  // abilityType comes straight from the character file, e.g. 'BASIC' or
-  // 'ELATION_SKILL') rather than derived from real kit type_text — those
-  // rows don't have a type_text to look up in the first place.
+
   const abilityType = resolvedAbilityType || TYPE_TEXT_TO_ABILITY[skillTypeText];
-  // appliesToAbility is usually a single ability-type string, but some real
-  // kits/equipment genuinely buff more than one ability type at once (e.g.
-  // a light cone passive boosting both Skill and Ultimate DMG) — for those,
-  // authored entries can pass an array instead of picking one and silently
-  // dropping the other.
   if (Array.isArray(conditional.appliesToAbility)) {
     return conditional.appliesToAbility.includes(abilityType);
   }
   return conditional.appliesToAbility === abilityType;
 }
 
-const STAT_TYPE_DESCRIPTIONS = {
-  DMG_PERCENT: 'Increases DMG dealt',
-  RES_PEN: "Reduces the enemy's elemental RES",
-  DEF_PEN: "Reduces the enemy's effective DEF",
-  CRIT_RATE: 'Increases CRIT Rate',
-  CRIT_DMG: 'Increases CRIT DMG',
-  ATK_PERCENT: 'Increases ATK (only matters if the skill scales off ATK)',
-  VULNERABILITY: 'Increases DMG the target takes from all sources',
-  ELATION_PERCENT_FLAT_ADD: "Increases the character's Elation stat by a flat amount",
-  ELATION_PERCENT_OF_SELF: "Increases the character's Elation stat by a % of their own current Elation",
-  ELATION_PERCENT_ATK_THRESHOLD: "Converts ATK above a threshold into Elation, capped",
-  ELATION_PERCENT_SPD_THRESHOLD:
-    "Grants a base Elation % once SPD reaches a threshold, plus more per SPD point above it, capped by a max excess SPD",
-  OTHER: "Doesn't map to a stat this calculator currently applies to damage",
-};
-
-// Compact names for STAT_OVERFLOW_SPLIT display (checkbox label, live
-// preview) — STAT_TYPE_DESCRIPTIONS above is too verbose ("Increases CRIT
-// Rate") for an inline "X% -> Y%" readout.
-const STAT_TYPE_SHORT_LABELS = {
-  DMG_PERCENT: 'DMG%',
-  CRIT_RATE: 'CRIT Rate',
-  CRIT_DMG: 'CRIT DMG',
-  ATK_PERCENT: 'ATK%',
-};
-
-// The tooltip used to be an absolutely-positioned child of the "?" icon.
-// That's fine on its own, but when the icon sits inside a scrollable
-// container (the damage calculator's conditional bonuses list), an
-// absolutely-positioned descendant that pokes past the container's right
-// edge expands that container's scrollable content area — so the whole
-// menu picked up an unwanted horizontal scrollbar just because one tooltip
-// happened to render near the edge.
-//
-// Rendering the tooltip through a portal into document.body sidesteps that
-// entirely: it's laid out relative to the viewport, not the scrolling
-// menu, so it can never affect the menu's scroll dimensions. We measure
-// the icon's position on hover/focus and clamp the tooltip's horizontal
-// position so it always stays fully within the viewport.
-const TOOLTIP_WIDTH = 280;
-const TOOLTIP_VIEWPORT_MARGIN = 12;
-
+// TO BE REVIEWED
 function ConditionalHelpTooltip({ c }) {
   const iconRef = useRef(null);
   const [tooltipPos, setTooltipPos] = useState(null);
