@@ -23,12 +23,6 @@ app.use(express.json({ limit: '8mb' }));
 // cache JSON files are left on disk untouched (in case they're useful
 // reference while authoring new characters) but nothing in this file reads
 // or writes them anymore.
-const SHAREABLE_EQUIPMENT_TYPES = ['Light Cone Passive'];
-
-function isShareableEquipment(abilityType) {
-  return SHAREABLE_EQUIPMENT_TYPES.includes(abilityType) || abilityType.startsWith('Relic Set');
-}
-
 // Hand-authored kit/equipment files (server/characters/*.js,
 // server/equipment/*.js) replace Groq extraction entirely for whatever
 // they cover — see those folders for the actual data. Files are matched by
@@ -329,77 +323,33 @@ app.get('/api/character-kit', async (req, res) => {
   });
 });
 
-app.post('/api/interpret-skill', async (req, res) => {
-  const { description, characterName, abilityName } = req.body;
-
-  if (!description || typeof description !== 'string') {
-    res.status(400).json({ error: 'Missing "description" string in request body' });
-    return;
-  }
-
-  // Hand-authored ability data is the ONLY source now — no Groq fallback.
-  // If this ability isn't declared in a server/characters/ file, damage
-  // interpretation isn't supported for it, full stop.
-  if (characterName && abilityName) {
-    const override = await findCharacterOverride(characterName);
-    const abilityData = override?.abilities?.[abilityName];
-    if (abilityData) {
-      console.log(`Hand-authored ability hit: ${characterName} — ${abilityName}`);
-      res.json({
-        damageType: abilityData.dealsNoDirectDamage ? null : abilityData.damageType,
-        scalingStat: abilityData.dealsNoDirectDamage ? 'NONE' : abilityData.scalingStat,
-        damageSourceName: abilityData.damageSourceName,
-        dealsNoDirectDamage: !!abilityData.dealsNoDirectDamage,
-        cached: true,
-        source: 'hand-authored',
-      });
-      return;
-    }
-  }
-
-  res.status(404).json({
-    supported: false,
-    error: characterName
-      ? `"${abilityName || 'this ability'}" isn't hand-authored yet for ${characterName} — no AI fallback.`
-      : 'This ability isn\'t hand-authored yet — no AI fallback.',
-  });
-});
-
 // Kit and equipment conditionals now come exclusively from hand-authored
 // server/characters/*.js and server/equipment/*.js files — no Groq
 // fallback. If a character's kit isn't authored, or a piece of equipped
 // gear has no matching file, that's reported back explicitly as
 // unsupported rather than silently returning nothing or guessing.
 app.post('/api/extract-conditionals', async (req, res) => {
-  const { characterName, abilities } = req.body;
+  const { characterName, equipment = [] } = req.body;
 
   if (!characterName || typeof characterName !== 'string') {
     res.status(400).json({ error: 'Missing "characterName" string in request body' });
     return;
   }
 
-  if (!Array.isArray(abilities) || abilities.length === 0) {
-    res.status(400).json({ error: 'Missing non-empty "abilities" array in request body' });
+  if (!Array.isArray(equipment)) {
+    res.status(400).json({ error: '"equipment" must be an array' });
     return;
   }
 
-  const invalidAbility = abilities.find(
-    (a) => !a || typeof a.type !== 'string' || typeof a.description !== 'string'
+  const invalidEquipment = equipment.find(
+    (e) => !e || typeof e.name !== 'string' || !EQUIPMENT_TIER_KEY[e.type]
   );
-  if (invalidAbility) {
-    res.status(400).json({ error: 'Each ability needs a "type" string and "description" string' });
+  if (invalidEquipment) {
+    res.status(400).json({
+      error: `Each equipment entry needs a "name" string and a "type" of ${Object.keys(EQUIPMENT_TIER_KEY).join(', ')}`,
+    });
     return;
   }
-
-  console.log(
-    `Received ${abilities.length} ability/abilities for ${characterName}:`,
-    abilities.map(
-      (a) =>
-        `[${a.type}] "${a.name || '(no name)'}": ${a.description.slice(0, 400)}${a.description.length > 400 ? '...' : ''}`
-    )
-  );
-
-  const equipmentAbilities = abilities.filter((a) => isShareableEquipment(a.type));
 
   const characterOverride = await findCharacterOverride(characterName);
   const kitSupported = !!characterOverride;
@@ -414,9 +364,9 @@ app.post('/api/extract-conditionals', async (req, res) => {
   const equipmentConditionals = [];
   const unsupportedEquipment = [];
 
-  for (const ability of equipmentAbilities) {
+  for (const ability of equipment) {
     const tierKey = EQUIPMENT_TIER_KEY[ability.type];
-    const equipmentOverride = tierKey ? await findEquipmentOverride(ability.name) : null;
+    const equipmentOverride = await findEquipmentOverride(ability.name);
     const overrideConditionals = equipmentOverride?.conditionalsByTier?.[tierKey];
 
     if (overrideConditionals) {

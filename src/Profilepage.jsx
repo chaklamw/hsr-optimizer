@@ -142,41 +142,6 @@ const ELEMENT_DMG_TYPE = {
   Imaginary: 'ImaginaryAddedRatio',
 };
 
-const STAT_TYPE_DESCRIPTIONS = {
-  DMG_PERCENT: 'Increases DMG dealt',
-  RES_PEN: "Reduces the enemy's elemental RES",
-  DEF_PEN: "Reduces the enemy's effective DEF",
-  CRIT_RATE: 'Increases CRIT Rate',
-  CRIT_DMG: 'Increases CRIT DMG',
-  ATK_PERCENT: 'Increases ATK (only matters if the skill scales off ATK)',
-  VULNERABILITY: 'Increases DMG the target takes from all sources',
-  ELATION_PERCENT_FLAT_ADD: "Increases the character's Elation stat by a flat amount",
-  ELATION_PERCENT_OF_SELF: "Increases the character's Elation stat by a % of their own current Elation",
-  ELATION_PERCENT_ATK_THRESHOLD: "Converts ATK above a threshold into Elation, capped",
-  ELATION_PERCENT_SPD_THRESHOLD:
-    "Grants a base Elation % once SPD reaches a threshold, plus more per SPD point above it, capped by a max excess SPD",
-  OTHER: "Doesn't map to a stat this calculator currently applies to damage",
-};
-
-const STAT_TYPE_SHORT_LABELS = {
-  DMG_PERCENT: 'DMG%',
-  CRIT_RATE: 'CRIT Rate',
-  CRIT_DMG: 'CRIT DMG',
-  ATK_PERCENT: 'ATK%',
-};
-
-const TYPE_TEXT_TO_ABILITY = {
-  'Basic ATK': 'BASIC',
-  Skill: 'SKILL',
-  Ultimate: 'ULT',
-  Talent: 'FUA',
-  'Memosprite Skill': 'SKILL',
-  'Elation Skill': 'SKILL',
-};
-
-const TOOLTIP_WIDTH = 280;
-const TOOLTIP_VIEWPORT_MARGIN = 12;
-
 // Reverse lookup: given a label, it will return the property id that matches the label
 // e.g Crit Rate -> CriticalChanceBase. This is being used in situations such as OCR scanning
 // in which we scan stats from relics and we need to turn it back into the property id.
@@ -474,11 +439,11 @@ function resolveAuthoredBlastAdjacentMultiplierPercent(abilityData, level) {
   return abilityData?.blastAdjacentMultiplierPercent ?? null;
 }
 
-async function extractConditionals(characterName, abilities) {
+async function extractConditionals(characterName, equipment) {
   const res = await fetch('http://localhost:3001/api/extract-conditionals', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ characterName, abilities }),
+    body: JSON.stringify({ characterName, equipment }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `Server responded ${res.status}`);
@@ -489,41 +454,108 @@ async function extractConditionals(characterName, abilities) {
   };
 }
 
-// Ability naming convention follows 'abilityType: abilityName' so this function
-// takes the full text and strips abilityType and returns abilityName as long
-// as abilityName exists. If it doesn't then it returns 'abilityType:'. Even 
-// in the case with just 'abilityType: ', it will return the leading white space.
-// If abilityType doesn't exist, then it will return the label.
+// Maps the ability type text StarRailRes uses to the same enum the
+// extraction endpoint returns, so an authored conditional can be
+// matched against whichever skill is currently selected in the calculator.
+const TYPE_TEXT_TO_ABILITY = {
+  'Basic ATK': 'BASIC',
+  Skill: 'SKILL',
+  Ultimate: 'ULT',
+  Talent: 'FUA',
+  // Memosprite Skill (e.g. Castorice's Netherwing) and Elation Skill
+  // (Path of Elation characters) are both skill-type actions as far as the
+  // extraction endpoint's VALID_ABILITY_TARGETS enum is concerned — the AI
+  // extractor never returns anything more specific than 'SKILL' for them,
+  // so a conditional scoped to 'SKILL' should still match these.
+  'Memosprite Skill': 'SKILL',
+  'Elation Skill': 'SKILL',
+};
+
+// Authored rotation-row ability keys follow the "TypeText: Name" convention
+// (e.g. 'Basic ATK: Bloom! Winner Takes All') documented throughout the
+// character files, but restrictedToAbilityName is always written as the
+// BARE name — matching the convention for real (non-authored) abilities,
+// where skill.name from characterSkills is already bare. Strips the
+// leading "TypeText: " prefix so authored rows compare on equal footing
+// with real ones. Uses the first colon only (not a global strip), since an
+// ability's own real name can itself contain a colon (e.g. "Elation Skill:
+// Signal Overflow: The Great Encore!" -> "Signal Overflow: The Great
+// Encore!", not just "Signal Overflow").
 function stripAuthoredAbilityTypePrefix(label) {
   if (typeof label !== 'string') return label;
   const match = label.match(/^[^:]+:\s*(.+)$/);
   return match ? match[1] : label;
 }
 
-// Function returns a boolean for whether a certain conditional bonus applies
-// to this ability (skillName and resolvedAbilityType).
-// First checks if the conditional has a field 'restrictedToAbilityName' and
-// if it does, returns a boolean on whether they match
-// If it doesn't have a 'restrictedToAbilityName', then it checks whether
-// that conditional applies to all abilities. If it does, returns true.
-// Otherwise, looks at what kind of ability we are looking at.
-// If the conditional applies to multiple abilities (an array), then
-// returns a boolean on whether that conditional includes our current 
-// abilityType. If the conditional applies to a certain ability type, then it 
-// returns a boolean on whether our current abilityType matches the conditional. 
 function conditionalAppliesToSkill(conditional, skillTypeText, skillName, resolvedAbilityType) {
+  // A conditional whose bonus is scoped to one specific named ability
+  // variant (e.g. Sparxie's "Bloom! Winner Takes All", an enhanced Basic
+  // ATK that shares type_text "Basic ATK" with her ordinary Basic ATK)
+  // must match that exact ability, not just its broad type — otherwise a
+  // bonus meant only for the enhanced attack silently also applies to the
+  // un-enhanced one. This check runs before the ALL/type-text checks below
+  // since it's strictly narrower than either of them.
   if (conditional.restrictedToAbilityName) {
     return conditional.restrictedToAbilityName === skillName;
   }
-
   if (conditional.appliesToAbility === 'ALL') return true;
-
+  // resolvedAbilityType is passed directly for authored rows (their
+  // abilityType comes straight from the character file, e.g. 'BASIC' or
+  // 'ELATION_SKILL') rather than derived from real kit type_text — those
+  // rows don't have a type_text to look up in the first place.
   const abilityType = resolvedAbilityType || TYPE_TEXT_TO_ABILITY[skillTypeText];
+  // appliesToAbility is usually a single ability-type string, but some real
+  // kits/equipment genuinely buff more than one ability type at once (e.g.
+  // a light cone passive boosting both Skill and Ultimate DMG) — for those,
+  // authored entries can pass an array instead of picking one and silently
+  // dropping the other.
   if (Array.isArray(conditional.appliesToAbility)) {
     return conditional.appliesToAbility.includes(abilityType);
   }
   return conditional.appliesToAbility === abilityType;
 }
+
+const STAT_TYPE_DESCRIPTIONS = {
+  DMG_PERCENT: 'Increases DMG dealt',
+  RES_PEN: "Reduces the enemy's elemental RES",
+  DEF_PEN: "Reduces the enemy's effective DEF",
+  CRIT_RATE: 'Increases CRIT Rate',
+  CRIT_DMG: 'Increases CRIT DMG',
+  ATK_PERCENT: 'Increases ATK (only matters if the skill scales off ATK)',
+  VULNERABILITY: 'Increases DMG the target takes from all sources',
+  ELATION_PERCENT_FLAT_ADD: "Increases the character's Elation stat by a flat amount",
+  ELATION_PERCENT_OF_SELF: "Increases the character's Elation stat by a % of their own current Elation",
+  ELATION_PERCENT_ATK_THRESHOLD: "Converts ATK above a threshold into Elation, capped",
+  ELATION_PERCENT_SPD_THRESHOLD:
+    "Grants a base Elation % once SPD reaches a threshold, plus more per SPD point above it, capped by a max excess SPD",
+  OTHER: "Doesn't map to a stat this calculator currently applies to damage",
+};
+
+// Compact names for STAT_OVERFLOW_SPLIT display (checkbox label, live
+// preview) — STAT_TYPE_DESCRIPTIONS above is too verbose ("Increases CRIT
+// Rate") for an inline "X% -> Y%" readout.
+const STAT_TYPE_SHORT_LABELS = {
+  DMG_PERCENT: 'DMG%',
+  CRIT_RATE: 'CRIT Rate',
+  CRIT_DMG: 'CRIT DMG',
+  ATK_PERCENT: 'ATK%',
+};
+
+// The tooltip used to be an absolutely-positioned child of the "?" icon.
+// That's fine on its own, but when the icon sits inside a scrollable
+// container (the damage calculator's conditional bonuses list), an
+// absolutely-positioned descendant that pokes past the container's right
+// edge expands that container's scrollable content area — so the whole
+// menu picked up an unwanted horizontal scrollbar just because one tooltip
+// happened to render near the edge.
+//
+// Rendering the tooltip through a portal into document.body sidesteps that
+// entirely: it's laid out relative to the viewport, not the scrolling
+// menu, so it can never affect the menu's scroll dimensions. We measure
+// the icon's position on hover/focus and clamp the tooltip's horizontal
+// position so it always stays fully within the viewport.
+const TOOLTIP_WIDTH = 280;
+const TOOLTIP_VIEWPORT_MARGIN = 12;
 
 function ConditionalHelpTooltip({ c }) {
   const iconRef = useRef(null);
@@ -641,27 +673,6 @@ function ConditionalHelpTooltip({ c }) {
 // with no #1[i]%-style placeholder, so they carry no numeric params at
 // all — resolving via params first, falling back to the raw desc, keeps
 // those from being excluded just for lacking scaling values.
-// Broader than a literal "DMG" check — a stat-boosting effect might only
-// mention CRIT Rate, RES, DEF, or ATK without ever using the word "DMG"
-// itself (e.g. "gains CRIT Rate when SPD is below 95"), and those are just
-// as damage-relevant as anything with "DMG" in it. Used everywhere ability
-// text gets filtered before being sent for conditional extraction.
-function isDamageRelevantText(text) {
-  if (!text) return false;
-  return /\b(dmg|crit|res|def|atk)\b|vulnerab/i.test(text);
-}
-
-function mentionsDamage(skill) {
-  if (!skill) return false;
-  const firstLevelParams = Array.isArray(skill.params) ? skill.params[0] : null;
-  const resolvedDesc =
-    (Array.isArray(firstLevelParams) && firstLevelParams.length > 0
-      ? formatDescPlaceholders(skill.desc, firstLevelParams)
-      : null) || skill.desc || '';
-  if (!resolvedDesc) return false;
-  return isDamageRelevantText(resolvedDesc);
-}
-
 const TOTAL_REQUESTS = 10;
 
 function computeFinalStats(character, promotions, relicSets, skillTrees, lightConeRanks) {
@@ -1520,66 +1531,19 @@ export default function ProfilePage() {
 
   async function handleDetectAuthoredConditionals() {
     const characterName = characterNames[activeCharacter.avatarId]?.name || 'Unknown';
-    const skillIds = characterNames[activeCharacter.avatarId]?.skills || [];
     // Marked as soon as detection is kicked off (not just on success) so
     // the auto-detect effect below doesn't loop retrying a character whose
     // extraction failed — the user can still force a retry via the
     // "Detect" / "Re-detect" buttons, which call this function directly.
     setAuthoredConditionalCharacterId(activeCharacter.avatarId);
 
-    const seenDescriptions = new Set();
-    const abilities = skillIds
-      .map((id) => characterSkills[id])
-      .filter(mentionsDamage)
-      .map((s) => ({
-        type: s.type_text || 'Ability',
-        description: formatDescPlaceholders(s.desc, s.params[s.params.length - 1]) || s.desc,
-        name: s.name,
-      }))
-      .filter((a) => a.description)
-      // Characters with multiple skill IDs sharing a name (e.g. Castorice's
-      // per-cast variants) otherwise send byte-identical description text
-      // multiple times, wasting prompt budget on redundant content instead
-      // of leaving that room for effects that are actually distinct.
-      .filter((a) => {
-        if (seenDescriptions.has(a.description)) return false;
-        seenDescriptions.add(a.description);
-        return true;
-      });
+    // Only names and tiers go to the server, which looks each one up in
+    // server/equipment/ — anything without a file comes back in
+    // unsupportedEquipment so it can be shown to the user.
+    const equipment = [];
+    const lcName = lightConeNames[activeCharacter.equipment?.tid]?.name;
+    if (lcName) equipment.push({ type: 'Light Cone Passive', name: lcName });
 
-    // Light cone passives (e.g. a signature LC's DEF Ignore or DMG Boost)
-    // are just as damage-relevant as the character's own kit but live in a
-    // completely separate data source (lightConeRanks, resolved at the
-    // equipped superimposition rank) — include it so effects like these
-    // don't require manually re-entering for every character/LC pairing.
-    const equipment = activeCharacter.equipment;
-    if (equipment) {
-      const rankData = lightConeRanks[equipment.tid];
-      const lcName = lightConeNames[equipment.tid]?.name || 'Light Cone';
-      const lcDesc = rankData
-        ? formatDescPlaceholders(rankData.desc, rankData.params?.[equipment.rank - 1]) || rankData.desc || ''
-        : '';
-      if (lcDesc && isDamageRelevantText(lcDesc)) {
-        abilities.push({
-          type: 'Light Cone Passive',
-          description: `${lcName} (Superimposition ${equipment.rank}): ${lcDesc}`,
-          name: lcName,
-        });
-      }
-    }
-
-    // Any tier of a relic/ornament set's text can bundle a genuinely
-    // conditional effect, not just the 4pc tier — e.g. Pioneer Diver of
-    // Dead Waters' 2pc is "Increases DMG dealt to enemies with debuff by
-    // 12%," which is conditional on the ENEMY's state and has no numeric
-    // stat anywhere in fetched player data for it to already be captured
-    // by. Trying to pre-filter which tiers are "safe" to skip (2pc vs
-    // 4pc, body set vs ornament set) turned out to be guessing rather
-    // than a reliable rule, so every tier's text is sent through
-    // extraction instead — the prompt already knows how to separate a
-    // flat baseline (already applied via properties[0] in
-    // computeFinalStats) from a bundled conditional bonus, so it's the
-    // right place for that filtering to happen, not here.
     const setCounts = {};
     (activeCharacter.relicList || []).forEach((relic) => {
       const setID = relic._flat?.setID;
@@ -1588,55 +1552,15 @@ export default function ProfilePage() {
     Object.entries(setCounts).forEach(([setID, count]) => {
       const set = relicSets[setID];
       if (!set) return;
-      if (count >= 2 && set.desc[0] && isDamageRelevantText(set.desc[0])) {
-        abilities.push({
-          type: 'Relic Set (2pc)',
-          description: `${set.name} (2pc): ${set.desc[0]}`,
-          name: set.name,
-        });
-      }
-      if (count >= 4 && set.desc[1] && isDamageRelevantText(set.desc[1])) {
-        abilities.push({
-          type: 'Relic Set (4pc)',
-          description: `${set.name} (4pc): ${set.desc[1]}`,
-          name: set.name,
-        });
-      }
+      if (count >= 2) equipment.push({ type: 'Relic Set (2pc)', name: set.name });
+      if (count >= 4) equipment.push({ type: 'Relic Set (4pc)', name: set.name });
     });
-
-    // Trace nodes (Bonus Abilities) can carry the same kind of conditional
-    // damage bonus as a kit ability or relic set — e.g. Castorice's "Where
-    // the West Wind Dwells" (+30% DMG per Breath Scorches the Shadow cast,
-    // stacking up to 6, lasting until end of turn) — but live in a
-    // separate data source (character_skill_trees.json) that isn't part of
-    // characterSkills. Only nodes the player has actually unlocked/leveled
-    // are sent, mirroring how only equipped relic set tiers are sent above.
-    (activeCharacter.skillTreeList || []).forEach((point) => {
-      const treeInfo = skillTrees[point.pointId];
-      if (!treeInfo || !treeInfo.desc) return;
-      const levelParams = treeInfo.params?.[point.level - 1] || treeInfo.params?.[treeInfo.params.length - 1];
-      const desc = formatDescPlaceholders(treeInfo.desc, levelParams) || treeInfo.desc;
-      if (desc && isDamageRelevantText(desc) && !seenDescriptions.has(desc)) {
-        seenDescriptions.add(desc);
-        abilities.push({
-          type: 'Trace',
-          description: `${treeInfo.name || 'Trace'}: ${desc}`,
-          name: treeInfo.name || 'Trace',
-        });
-      }
-    });
-
-    if (abilities.length === 0) {
-      setAuthoredConditionalStatus('error');
-      setAuthoredConditionalError('No resolved ability descriptions found for this character.');
-      return;
-    }
 
     setAuthoredConditionalStatus('loading');
     setAuthoredConditionalError('');
     try {
       const { conditionals, kitSupported: kitOk, unsupportedEquipment: unsupportedItems } =
-        await extractConditionals(characterName, abilities);
+        await extractConditionals(characterName, equipment);
       setAuthoredConditionals(conditionals);
       setAuthoredConditionalStacks({});
       setKitSupported(kitOk);
