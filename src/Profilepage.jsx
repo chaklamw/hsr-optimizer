@@ -165,6 +165,20 @@ const STAT_TYPE_SHORT_LABELS = {
   ATK_PERCENT: 'ATK%',
 };
 
+// Maps the ability type text StarRailRes uses to the same enum the
+// extraction endpoint returns, so an authored conditional can be
+// matched against whichever skill is currently selected in the calculator.
+const TYPE_TEXT_TO_ABILITY = {
+  'Basic ATK': 'BASIC',
+  Skill: 'SKILL',
+  Ultimate: 'ULT',
+  Talent: 'FUA',
+  'Memosprite Skill': 'SKILL',
+  'Elation Skill': 'SKILL',
+};
+
+const TOTAL_REQUESTS = 10;
+
 const TOOLTIP_WIDTH = 280;
 const TOOLTIP_VIEWPORT_MARGIN = 12;
 
@@ -480,23 +494,6 @@ async function extractConditionals(characterName, equipment) {
   };
 }
 
-// Maps the ability type text StarRailRes uses to the same enum the
-// extraction endpoint returns, so an authored conditional can be
-// matched against whichever skill is currently selected in the calculator.
-const TYPE_TEXT_TO_ABILITY = {
-  'Basic ATK': 'BASIC',
-  Skill: 'SKILL',
-  Ultimate: 'ULT',
-  Talent: 'FUA',
-  // Memosprite Skill (e.g. Castorice's Netherwing) and Elation Skill
-  // (Path of Elation characters) are both skill-type actions as far as the
-  // extraction endpoint's VALID_ABILITY_TARGETS enum is concerned — the AI
-  // extractor never returns anything more specific than 'SKILL' for them,
-  // so a conditional scoped to 'SKILL' should still match these.
-  'Memosprite Skill': 'SKILL',
-  'Elation Skill': 'SKILL',
-};
-
 // Ability naming convention follows 'abilityType: abilityName' so this function
 // takes the full text and strips abilityType and returns abilityName as long
 // as abilityName exists. If it doesn't then it returns 'abilityType:'. Even 
@@ -635,22 +632,6 @@ function ConditionalHelpTooltip({ c }) {
     </span>
   );
 }
-
-// StarRailRes lists some non-damage entries alongside real attacks — e.g.
-// Archer's "Skill: End", a state-exit toggle with no scaling values, but
-// also heal/shield/buff/summon skills that DO carry nonzero params (heal
-// amount, shield value, buff %) despite not dealing damage. This check is
-// deliberately loose — it also matches text that only mentions DMG in
-// passing (e.g. "increases DMG dealt by X%", "DMG Boost effect") — which
-// is exactly what's wanted when gathering ability text for the AI
-// conditional detector, since that's where such buffs get read from.
-//
-// Some conditional buffs (e.g. Castorice's Talent: "+20% DMG per stack")
-// are flat, non-level-scaled numbers baked directly into the description
-// with no #1[i]%-style placeholder, so they carry no numeric params at
-// all — resolving via params first, falling back to the raw desc, keeps
-// those from being excluded just for lacking scaling values.
-const TOTAL_REQUESTS = 10;
 
 function computeFinalStats(character, promotions, relicSets, skillTrees, lightConeRanks) {
   const promoData = promotions[character.avatarId]?.values?.[character.promotion];
