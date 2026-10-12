@@ -633,6 +633,14 @@ function ConditionalHelpTooltip({ c }) {
   );
 }
 
+// Function takes in 5 arguments. 
+// character is a plain JavaScript object that has information on their ascension level,
+// character level, their relics, lightcone, and their skill tree unlocks.
+// promotions is a table that contains all the information about the ascension stats.
+// Likewise, relicSets and skillTrees contains the stat bonuses for relics and skill tree 
+// (from StarRailRes).
+// lightConeRanks gives the passive stats.
+// returns null if thre is no promotion, otherwise the final stats as a JavaScript object
 function computeFinalStats(character, promotions, relicSets, skillTrees, lightConeRanks) {
   const promoData = promotions[character.avatarId]?.values?.[character.promotion];
   if (!promoData) return null;
