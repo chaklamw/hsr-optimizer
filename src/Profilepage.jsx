@@ -731,18 +731,16 @@ function computeFinalStats(character, promotions, relicSets, skillTrees, lightCo
   };
 }
 
-// Builds a fake relic object shaped like the real relics in
-// character.relicList (i.e. matching the `_flat.props` shape
-// computeFinalStats reads), out of the relic-compare form's main stat +
-// substats. Those form values are stored in human-readable display units
-// (e.g. 10.7 for "10.7%"), so percent stat types need /100 to become the
-// fraction units _flat.props uses internally — flat stat types (HP/ATK/
-// DEF/SPD Delta) are used as-is.
-//
-// setID is passed in by the caller — usually the equipped piece's own
-// set, but the compare form also allows overriding it to a different set
-// (e.g. after a Groq-detected relic turns out to belong to a different
-// set than what's currently equipped in that slot).
+// Function takes in four arguments
+// slotType is an int based on what slot type the relic will be occupying
+// setID is the set that the relic is a part of
+// mainStat and substats are the main stat and substats of the relic in the form of
+// { type, value } where type is the stat of the relic and value is shown in display units 
+// (e.g 10.5 -> 10.5% for percentage, flat ones are shown as is).
+// Entries with no type or value get skipped.
+// returns a JavaScript object that is a representation of the relic to be used
+// in the damage comparison of swapping out a relic. This has the same representation
+// as the relics shown in character.relicList.
 function buildSyntheticRelic(slotType, setID, mainStat, substats) {
   const props = [];
 
