@@ -767,24 +767,14 @@ function buildSyntheticRelic(slotType, setID, mainStat, substats) {
   };
 }
 
-// Silver Wolf LV.999's "Hidden MMR" talent: on gaining Punchline, she gains
-// an equal amount of "Hidden MMR" — each point adds 0.4% CRIT Rate, until
-// CRIT Rate reaches 100%, after which remaining points switch to adding
-// 0.8% CRIT DMG instead. The split point depends on her CRIT Rate *before*
-// Hidden MMR is applied (gear + other conditionals), which isn't something
-// the AI kit-extraction prompt can know, so this is computed directly here
-// instead of going through the generic conditional-stacking schema.
-// Generic resource-to-stat overflow split: a per-point resource fills
-// `primaryStat` at `primaryRatePerPoint` per point until it reaches
-// `capPercent`, then remaining points fill `secondaryStat` at
-// `secondaryRatePerPoint` instead. The split point depends on the
-// character's own current value of the primary stat (from gear + other
-// conditionals), which isn't knowable from kit text alone, so this is
-// computed here rather than through the generic valuesByStack stacking
-// path. Driven entirely by an authored STAT_OVERFLOW_SPLIT
-// conditional (see server.js) instead of any character-specific
-// hardcoding — works for any character whose kit describes a mechanic
-// shaped like this, not just Silver Wolf LV.999.
+// Returns a JavaScript object with a primary bonus and secondary bonus 
+// (in percentages)
+// This is used for characters that can convert resources into other stats.
+// e.g Silver Wolf LVL 999 will convert her "Hidden MMR" points to 
+// crit rate up to 100% and "Hidden MMR" that pushes it beyond 100% gets
+// converted to 0.8% crit damage per point. This cannot be hard coded to a
+// fixed value because a well-built Silver Wolf LVL 999 with high crit rate
+// will convert more to crit damage than a lower crit rate build. 
 function computeStatOverflowSplit(basePrimaryStatPercent, resourcePoints, overflow) {
   const points = Math.max(0, resourcePoints);
   const pointsNeededToCap = Math.max(0, (overflow.capPercent - basePrimaryStatPercent) / overflow.primaryRatePerPoint);
