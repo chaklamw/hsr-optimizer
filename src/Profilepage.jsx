@@ -786,16 +786,13 @@ function computeStatOverflowSplit(basePrimaryStatPercent, resourcePoints, overfl
   };
 }
 
-// Recomputes total ability damage for a given stats block (as returned by
-// computeFinalStats), using whatever ability/enemy/conditional
-// configuration is currently set in the Damage Calculator. This mirrors
-// the calculation embedded in the showDamageCalc render block below, but
-// is parameterized on `stats` instead of closing over activeStats, so the
-// relic-compare panel can call it twice — once for the equipped relic's
-// stats, once for the hypothetical "new relic" stats — and diff the
-// result. Kept as a separate pure function rather than sharing code with
-// the render block to avoid touching that already-working JSX; worth
-// unifying later if the duplication becomes a maintenance problem.
+// Function gets called for each row in the authored rotation
+// takes in the stats of the character, along with the scenario
+// returns the total damage dealt from one row, 
+// summed over the number of targets hit
+// returns null if something is missing in the calculations
+// returns 0 if its an ability based on certified banger and certified
+// banger is missing
 function computeScenarioTotalDamage(stats, scenario) {
   const {
     activeCharacter,
@@ -812,68 +809,19 @@ function computeScenarioTotalDamage(stats, scenario) {
     calcUsingCertifiedBanger,
     calcUsingOverflowSplit,
     calcScalingStat,
-    // Shared across every row in the rotation (built once from ALL rows'
-    // own stackingTriggers, keyed by each row's stripped ability name).
-    // This lets a conditional whose sourceAbilityName matches a DIFFERENT
-    // row (e.g. Sparxie's "Engagement Farming" row driving a DMG_PERCENT
-    // bonus on her separate "Bloom! Winner Takes All" row) read that
-    // other row's own trigger-count input instead of requiring a
-    // redundant, disconnected manual dropdown.
     calcSourceAbilityTriggerCounts,
-    // Shared across every row, keyed by each row's REAL ability identity
-    // (skillMatchName if the kit declared one, else its stripped label) —
-    // summed countPerRotation across every row sharing that identity, even
-    // when they're authored as multiple distinctly-labeled tiers (e.g.
-    // Castorice's 3 Breath Scorches the Shadow rows). Distinct from
-    // calcSourceAbilityTriggerCounts above: that one keys off stackingTriggers
-    // (a manually-set resource count, e.g. Sparxie's Engagement Farming),
-    // this one is a plain cast-count tally, for a conditional whose actual
-    // trigger ability isn't the same string as its sourceAbilityName (e.g.
-    // a trace-gated conditional, where sourceAbilityName has to be the
-    // trace's own name for unlock-checking, not the ability that triggers
-    // its stacks).
     calcAbilityCastCounts,
     authoredConditionals,
     authoredConditionalStacks,
     elementDmgType,
-    // Rows come from a hand-authored character file (server/characters/*.js):
-    // the multiplier is a fixed hand-typed percentage, not derived from
-    // characterSkills/level params. A row without one calculates nothing.
-    calcAuthoredMultiplierPercent,
+    calcAuthoredMultiplierPercent, // ability's damage multiplier
     calcAuthoredAbilityName,
     calcAuthoredAbilityType,
     calcAuthoredAveragedAcrossEnemies,
-    // Opposite operation from AveragedAcrossEnemies above — true AoE that
-    // deals its full multiplier to EVERY enemy (e.g. "Deals 125% Elation
-    // DMG to all enemies," no "split evenly" language), so total damage
-    // scales UP with enemy count rather than being divided down.
     calcAuthoredHitsAllEnemies,
-    // Blast pattern — main target takes calcAuthoredMultiplierPercent,
-    // up to 2 adjacent targets each take this reduced percent instead
-    // (null/undefined for a non-Blast ability, which skips this entirely).
     calcAuthoredBlastAdjacentMultiplierPercent,
-    // Additional multiplier percentage points ADDED to
-    // calcAuthoredMultiplierPercent, scaled by the character's current
-    // Elation stat (effectiveElationPercent, computed below from the same
-    // live-fetched value ELATION_PERCENT_OF_SELF already reads). E.g.
-    // Sparxie's Ultimate is "(0.6 x Elation% + 60%) of ATK" — 60 is
-    // calcAuthoredMultiplierPercent, 0.6 is this field. 0/null/undefined
-    // for any ability whose multiplier doesn't scale with Elation (i.e.
-    // everyone else).
     calcAuthoredMultiplierPerElationPercent,
-    // Whether this specific row's ability/trigger only applies while the
-    // Certified Banger state is active (e.g. Silver Wolf's Top Loot Box,
-    // gated on both Bonus Stage AND Certified Banger, not just the
-    // former). Generic field, not Silver-Wolf-specific — any future
-    // character's kit can set requiresCertifiedBanger on an ability or
-    // attachedTrigger and get the same gating for free.
     calcAuthoredRequiresCertifiedBanger,
-    // Optional mutable object, provided by the caller (see
-    // computeRotationTotalDamage), populated as a side effect with the
-    // EXACT Elation numbers this specific row's calculation actually
-    // used — not the simplified character-level approximation shown
-    // elsewhere in the Damage Calculator modal. Undefined for every
-    // caller that doesn't pass it (a no-op in that case).
     calcElationBreakdownOut,
   } = scenario;
 
