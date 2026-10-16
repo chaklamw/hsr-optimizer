@@ -838,14 +838,6 @@ function computeScenarioTotalDamage(stats, scenario) {
     ? stats.genericStats.ElationDamageAddedRatio * 100
     : 0;
 
-  // Gated abilities/triggers (calcAuthoredRequiresCertifiedBanger, set
-  // from an ability or attachedTrigger's own requiresCertifiedBanger
-  // field) contribute zero damage unless the Certified Banger toggle
-  // is actually on — e.g. Silver Wolf's Top Loot Box, which requires
-  // BOTH Bonus Stage (already implied by which ability this row uses)
-  // AND Certified Banger, not just the former. Checked first, before
-  // any conditional matching or stat resolution, since none of that
-  // matters if this row isn't currently active at all.
   if (calcAuthoredRequiresCertifiedBanger && !calcUsingCertifiedBanger) {
     return 0;
   }
@@ -871,30 +863,7 @@ function computeScenarioTotalDamage(stats, scenario) {
     });
   }
 
-  // Resolves a conditional's effective stack count, checking sources in
-  // order: (1) sourceAbilityName matches a rotation row's own
-  // stackingTriggers input (calcSourceAbilityTriggerCounts) — the
-  // row-driven, self-explaining count the person actually set; (2)
-  // stackSourceAbilityName matches a DIFFERENT ability's total cast
-  // count across the rotation (calcAbilityCastCounts) — for a
-  // conditional whose sourceAbilityName has to be something else (e.g. a
-  // trace's own name, for unlock-gating) while its stacks are actually
-  // driven by a different ability being cast repeatedly; (3)
-  // resourceStackThreshold auto-derives a stack count from a raw
-  // resource-point value (e.g. Silver Wolf's Hidden MMR: 1 stack per 60
-  // points) instead of a cast count — this is the "auto apply based on
-  // how much of the resource she has" case, distinct from (1)/(2) which
-  // are both cast-count-driven, not point-value-driven. Currently only
-  // wired to calcPunchlineValue since that's the only free-standing
-  // resource-point input this calculator exposes (Punchline and Hidden
-  // MMR are numerically the same value for Silver Wolf per her Talent
-  // text, and this is the same value the STAT_OVERFLOW_SPLIT/Hidden-MMR-
-  // to-Crit conditional already reads) — generic by field name, not
-  // Silver-Wolf-specific, but a future character whose auto-stacking
-  // resource isn't Punchline-driven would need this extended with its
-  // own input; (4) falls back to the manual global dropdown
-  // (authoredConditionalStacks) only when none of the above apply, preserving
-  // old behavior rather than silently zeroing the conditional out.
+  // Returns the first instance in which conditional stacks are resolved
   const resolveConditionalStacks = (c) => {
     const rowDrivenCount = c.sourceAbilityName
       ? calcSourceAbilityTriggerCounts?.[c.sourceAbilityName]
@@ -930,14 +899,6 @@ function computeScenarioTotalDamage(stats, scenario) {
   const aiCritRateBonus = sumConditionalStat('CRIT_RATE');
   const aiCritDmgBonus = sumConditionalStat('CRIT_DMG');
 
-  // Blast-portion-aware version of the sum above. Most DMG_PERCENT
-  // conditionals apply uniformly to a whole ability's damage — Engagement
-  // Farming (Sparxie) is the first case where a real kit text gives
-  // DIFFERENT percentages for a Blast ability's main-target hit vs. its
-  // adjacent-target hits. A conditional with no restrictedToBlastPortion
-  // field is included in BOTH sums below (unchanged behavior for every
-  // conditional authored before this fix); one that sets 'MAIN' or
-  // 'ADJACENT' only counts toward that portion.
   const sumDmgPercentForBlastPortion = (portion) =>
     matchedAll.reduce((sum, c) => {
       if (c.statType !== 'DMG_PERCENT') return sum;
@@ -945,10 +906,7 @@ function computeScenarioTotalDamage(stats, scenario) {
       const stacks = resolveConditionalStacks(c);
       return sum + (c.valuesByStack[stacks - 1] || 0);
     }, 0);
-  // aiDmgPercent below is used for the main hit (and the non-Blast paths,
-  // where it's the only DMG% sum that matters) — it now excludes any
-  // ADJACENT-only conditional, which sumConditionalStat's plain unfiltered
-  // sum would have incorrectly included.
+
   let aiDmgPercent = sumDmgPercentForBlastPortion('MAIN');
   const aiDmgPercentAdjacentPortion = sumDmgPercentForBlastPortion('ADJACENT');
   let aiAtkPercentBonus = sumConditionalStat('ATK_PERCENT');
@@ -973,12 +931,6 @@ function computeScenarioTotalDamage(stats, scenario) {
     const applyBonus = (statKey, bonus) => {
       if (statKey === 'CRIT_RATE') overflowCritRateBonus += bonus;
       else if (statKey === 'CRIT_DMG') overflowCritDmgBonus += bonus;
-      // NOTE: only feeds the main-hit aiDmgPercent, not
-      // aiDmgPercentAdjacentPortion — STAT_OVERFLOW_SPLIT (Silver Wolf's
-      // Hidden MMR) has never co-occurred with a Blast-pattern ability in
-      // any authored character, so this hasn't needed fixing. If a
-      // future character combines both, the adjacent hit will be missing
-      // this bonus.
       else if (statKey === 'DMG_PERCENT') aiDmgPercent += bonus;
       else if (statKey === 'ATK_PERCENT') aiAtkPercentBonus += bonus;
     };
@@ -988,25 +940,7 @@ function computeScenarioTotalDamage(stats, scenario) {
 
   const effectiveCritRatePercent = baseCritRatePercent + overflowCritRateBonus;
   const effectiveCritDmgPercent = baseCritDmgPercent + overflowCritDmgBonus;
-
-  // Flat, additive Elation-stat bonus (e.g. a light cone's "all allies
-  // +X% Elation" on some trigger) — a straightforward percentage-point
-  // add, same shape as DMG_PERCENT/CRIT_RATE/etc., unlike the
-  // multiplicative-of-self case just below. Applied BEFORE any
-  // %-of-current-Elation multiplier, since a %-of-current mechanic
-  // should read the character's actual total Elation (flat buffs
-  // included), not just their unbuffed base value.
   const aiElationFlatAddPercent = sumConditionalStat('ELATION_PERCENT_FLAT_ADD');
-
-  // ATK-threshold-to-Elation conversion (e.g. Sparxie's "Sweet! Punchline
-  // Signing": +5% Elation per 100 ATK above 2000, capped at +80%). Unlike
-  // STAT_OVERFLOW_SPLIT (Silver Wolf's Hidden MMR), the input here is the
-  // character's own live ATK stat, not a manually-entered resource-point
-  // count — so it reads `stats.atk` directly rather than a scenario
-  // input field. Uses the same "effective ATK" definition as an
-  // ATK-scaling ability's own damage calc (base ATK x (1 +
-  // aiAtkPercentBonus%)) so a separate ATK_PERCENT conditional correctly
-  // pushes a character over/further past the threshold too.
   const atkThresholdConditional = matchedAll.find((c) => c.statType === 'ELATION_PERCENT_ATK_THRESHOLD');
   let aiElationFromAtkThreshold = 0;
   if (atkThresholdConditional?.atkThreshold && typeof stats.atk === 'number') {
@@ -1016,23 +950,6 @@ function computeScenarioTotalDamage(stats, scenario) {
     aiElationFromAtkThreshold = Math.min(capPercent, unitsOverThreshold * elationPercentPerUnit);
   }
 
-  // Self-referential Elation bonus — "increases Elation by X% of the
-  // character's OWN current Elation" (e.g. Yaoguang's Zone). This is
-  // multiplicative on her own base Elation, not a flat percentage-point
-  // add like DMG_PERCENT/CRIT_RATE/etc, so it gets the same kind of
-  // dedicated handling STAT_OVERFLOW_SPLIT gets above for its own
-  // non-standard shape, rather than being forced through the ordinary
-  // additive sumConditionalStat path. A character being buffed by their
-  // OWN "all allies" effect isn't a cross-character-buff problem — they
-  // count as one of their own allies — so this fits the existing
-  // single-character model cleanly.
-  // SPD-threshold-to-Elation conversion (e.g. Silver Wolf LV.999's False
-  // Ending Speedrun: at 160+ SPD, +50% Elation, then +2% per SPD point
-  // above 160, up to 100 excess SPD counted). Same live-stat-driven shape
-  // as ELATION_PERCENT_ATK_THRESHOLD above, but with a base % granted
-  // immediately at the threshold rather than scaling purely linearly from
-  // zero, and the excess is capped by a max SPD amount rather than a
-  // total percent cap.
   const spdThresholdConditional = matchedAll.find((c) => c.statType === 'ELATION_PERCENT_SPD_THRESHOLD');
   let aiElationFromSpdThreshold = 0;
   if (spdThresholdConditional?.spdThreshold && typeof stats.spd === 'number') {
@@ -1069,10 +986,6 @@ function computeScenarioTotalDamage(stats, scenario) {
 
   const brokenMultiplier = calcEnemyBroken ? 1.0 : 0.9;
 
-  // Shared by the main hit and (if this is a Blast-pattern ability) the
-  // adjacent-target hits below — everything except the multiplier itself
-  // is identical between them, so this avoids duplicating the whole
-  // computeDamage/computeElationDamage call shape twice.
   function computeAuthoredHit(multiplierPercent, dmgPercentOverride = aiDmgPercent) {
     if (isElation) {
       return computeElationDamage({
@@ -1149,23 +1062,6 @@ function computeScenarioTotalDamage(stats, scenario) {
   return totalDamage;
 }
 
-// Swaps a character's authored rotation entries for their "enhanced
-// state" siblings (e.g. Sparxie's Certified Banger, or any future
-// character using the same isEnhancedOnly/replacesAbilityName pattern —
-// Silver Wolf's Bonus Stage and Castorice's Boneclaw already declare this
-// metadata too, so this works for them for free if a similar toggle is
-// ever wired up for those states) and auto-injects any attachedTriggers
-// the enhanced ability declares that aren't already present as their own
-// rotation entries, so a real state toggle actually changes what gets
-// calculated instead of requiring the kit's default rotation to hardcode
-// every enhanced variant + its bonus-hit rows by hand.
-//
-// Deliberately looks up siblings via replacesAbilityName rather than any
-// name-string convention (no "(Certified Banger)" suffix matching) — this
-// keeps the swap fully generic/character-agnostic, per this app's
-// existing "no character-name hardcoding in engine code" rule. Returns
-// the ORIGINAL rotation array, untouched, when usingEnhancedState is
-// false or a base entry has no enhanced sibling.
 function buildEffectiveRotation(baseRotation, abilities, usingEnhancedState) {
   if (!usingEnhancedState || !abilities) return baseRotation;
 
@@ -1210,23 +1106,7 @@ function buildEffectiveRotation(baseRotation, abilities, usingEnhancedState) {
   return effective;
 }
 
-// Sums damage across a full rotation: each row supplies its own authored
-// multiplier plus its classification (damageType/scalingStat) from the
-// character file, while everything else (enemy config, Elation-wide fields,
-// authored conditionals) is shared across the whole rotation via
-// `globalScenario`. Reuses computeScenarioTotalDamage as the per-row engine
-// rather than duplicating its math — a rotation is just that function
-// called once per row, multiplied by how many times that row occurs in one
-// rotation cycle, summed.
 function computeRotationTotalDamage(stats, rows, globalScenario) {
-  // Built once per rotation (not per row) — keyed by each row's OWN
-  // stripped ability name, holding that row's own stackingTriggers value.
-  // Lets a conditional whose sourceAbilityName matches a DIFFERENT row
-  // (e.g. Sparxie's "Engagement Farming" row driving her separate
-  // "Bloom! Winner Takes All" row) read that other row's trigger count,
-  // instead of needing a disconnected manual dropdown that has no
-  // relationship to how many times you actually put that trigger ability
-  // in the rotation.
   const sourceAbilityTriggerCounts = {};
   rows.forEach((r) => {
     if (r.stackingTriggers != null) {
