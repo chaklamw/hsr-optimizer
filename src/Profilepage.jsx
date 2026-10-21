@@ -640,7 +640,7 @@ function ConditionalHelpTooltip({ c }) {
 // Likewise, relicSets and skillTrees contains the stat bonuses for relics and skill tree 
 // (from StarRailRes).
 // lightConeRanks gives the passive stats.
-// returns null if thre is no promotion, otherwise the final stats as a JavaScript object
+// returns null if there is no promotion, otherwise the final stats as a JavaScript object
 function computeFinalStats(character, promotions, relicSets, skillTrees, lightConeRanks) {
   const promoData = promotions[character.avatarId]?.values?.[character.promotion];
   if (!promoData) return null;
