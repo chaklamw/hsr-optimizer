@@ -853,7 +853,7 @@ function computeScenarioTotalDamage(stats, scenario) {
     console.log('[AUTHORED ROW]', {
       calcAuthoredAbilityName,
       calcAuthoredAbilityType,
-      allAiConditionalNames: authoredConditionals.map((c) => ({
+      allConditionalNames: authoredConditionals.map((c) => ({
         name: c.name,
         restrictedToAbilityName: c.restrictedToAbilityName ?? null,
         statType: c.statType,
@@ -893,11 +893,11 @@ function computeScenarioTotalDamage(stats, scenario) {
       return sum + (c.valuesByStack[stacks - 1] || 0);
     }, 0);
 
-  const aiResPenPercent = sumConditionalStat('RES_PEN');
-  const aiDefPenPercent = sumConditionalStat('DEF_PEN');
-  const aiVulnerabilityPercent = sumConditionalStat('VULNERABILITY');
-  const aiCritRateBonus = sumConditionalStat('CRIT_RATE');
-  const aiCritDmgBonus = sumConditionalStat('CRIT_DMG');
+  const resPenPercent = sumConditionalStat('RES_PEN');
+  const defPenPercent = sumConditionalStat('DEF_PEN');
+  const vulnerabilityPercent = sumConditionalStat('VULNERABILITY');
+  const critRateBonus = sumConditionalStat('CRIT_RATE');
+  const critDmgBonus = sumConditionalStat('CRIT_DMG');
 
   const sumDmgPercentForBlastPortion = (portion) =>
     matchedAll.reduce((sum, c) => {
@@ -907,14 +907,14 @@ function computeScenarioTotalDamage(stats, scenario) {
       return sum + (c.valuesByStack[stacks - 1] || 0);
     }, 0);
 
-  let aiDmgPercent = sumDmgPercentForBlastPortion('MAIN');
-  const aiDmgPercentAdjacentPortion = sumDmgPercentForBlastPortion('ADJACENT');
-  let aiAtkPercentBonus = sumConditionalStat('ATK_PERCENT');
+  let dmgPercent = sumDmgPercentForBlastPortion('MAIN');
+  const dmgPercentAdjacentPortion = sumDmgPercentForBlastPortion('ADJACENT');
+  let atkPercentBonus = sumConditionalStat('ATK_PERCENT');
 
-  const effectiveEnemyRes = calcEnemyRes - aiResPenPercent;
-  const effectiveDefShred = calcDefShred + aiDefPenPercent;
-  const baseCritRatePercent = parseFloat(stats.critRate) + aiCritRateBonus;
-  const baseCritDmgPercent = parseFloat(stats.critDmg) + aiCritDmgBonus;
+  const effectiveEnemyRes = calcEnemyRes - resPenPercent;
+  const effectiveDefShred = calcDefShred + defPenPercent;
+  const baseCritRatePercent = parseFloat(stats.critRate) + critRateBonus;
+  const baseCritDmgPercent = parseFloat(stats.critDmg) + critDmgBonus;
 
   const overflowConditional = matchedAll.find((c) => c.statType === 'STAT_OVERFLOW_SPLIT' && c.overflow);
   let overflowCritRateBonus = 0;
@@ -924,15 +924,15 @@ function computeScenarioTotalDamage(stats, scenario) {
     const baseValueByStat = {
       CRIT_RATE: baseCritRatePercent,
       CRIT_DMG: baseCritDmgPercent,
-      DMG_PERCENT: aiDmgPercent,
-      ATK_PERCENT: aiAtkPercentBonus,
+      DMG_PERCENT: dmgPercent,
+      ATK_PERCENT: atkPercentBonus,
     };
     const split = computeStatOverflowSplit(baseValueByStat[overflow.primaryStat] ?? 0, calcPunchlineValue, overflow);
     const applyBonus = (statKey, bonus) => {
       if (statKey === 'CRIT_RATE') overflowCritRateBonus += bonus;
       else if (statKey === 'CRIT_DMG') overflowCritDmgBonus += bonus;
-      else if (statKey === 'DMG_PERCENT') aiDmgPercent += bonus;
-      else if (statKey === 'ATK_PERCENT') aiAtkPercentBonus += bonus;
+      else if (statKey === 'DMG_PERCENT') dmgPercent += bonus;
+      else if (statKey === 'ATK_PERCENT') atkPercentBonus += bonus;
     };
     applyBonus(overflow.primaryStat, split.primaryBonus);
     applyBonus(overflow.secondaryStat, split.secondaryBonus);
@@ -940,30 +940,30 @@ function computeScenarioTotalDamage(stats, scenario) {
 
   const effectiveCritRatePercent = baseCritRatePercent + overflowCritRateBonus;
   const effectiveCritDmgPercent = baseCritDmgPercent + overflowCritDmgBonus;
-  const aiElationFlatAddPercent = sumConditionalStat('ELATION_PERCENT_FLAT_ADD');
+  const elationFlatAddPercent = sumConditionalStat('ELATION_PERCENT_FLAT_ADD');
   const atkThresholdConditional = matchedAll.find((c) => c.statType === 'ELATION_PERCENT_ATK_THRESHOLD');
-  let aiElationFromAtkThreshold = 0;
+  let elationFromAtkThreshold = 0;
   if (atkThresholdConditional?.atkThreshold && typeof stats.atk === 'number') {
     const { baseAtk, atkPerUnit, elationPercentPerUnit, capPercent } = atkThresholdConditional.atkThreshold;
-    const effectiveAtkForThreshold = stats.atk * (1 + aiAtkPercentBonus / 100);
+    const effectiveAtkForThreshold = stats.atk * (1 + atkPercentBonus / 100);
     const unitsOverThreshold = Math.max(0, effectiveAtkForThreshold - baseAtk) / atkPerUnit;
-    aiElationFromAtkThreshold = Math.min(capPercent, unitsOverThreshold * elationPercentPerUnit);
+    elationFromAtkThreshold = Math.min(capPercent, unitsOverThreshold * elationPercentPerUnit);
   }
 
   const spdThresholdConditional = matchedAll.find((c) => c.statType === 'ELATION_PERCENT_SPD_THRESHOLD');
-  let aiElationFromSpdThreshold = 0;
+  let elationFromSpdThreshold = 0;
   if (spdThresholdConditional?.spdThreshold && typeof stats.spd === 'number') {
     const { baseSpd, basePercent, spdPerUnit, elationPercentPerUnit, maxExcessSpd } =
       spdThresholdConditional.spdThreshold;
     if (stats.spd >= baseSpd) {
       const excessSpd = Math.min(maxExcessSpd, stats.spd - baseSpd);
-      aiElationFromSpdThreshold = basePercent + (excessSpd / spdPerUnit) * elationPercentPerUnit;
+      elationFromSpdThreshold = basePercent + (excessSpd / spdPerUnit) * elationPercentPerUnit;
     }
   }
 
   const elationSelfScaledConditional = matchedAll.find((c) => c.statType === 'ELATION_PERCENT_OF_SELF');
   let effectiveElationPercent =
-    elationPercent + aiElationFlatAddPercent + aiElationFromAtkThreshold + aiElationFromSpdThreshold;
+    elationPercent + elationFlatAddPercent + elationFromAtkThreshold + elationFromSpdThreshold;
   if (elationSelfScaledConditional) {
     const stacks = resolveConditionalStacks(elationSelfScaledConditional);
     const selfScaleRate = elationSelfScaledConditional.valuesByStack[stacks - 1] || 0;
@@ -981,12 +981,12 @@ function computeScenarioTotalDamage(stats, scenario) {
   const rawScalingValue = scalingKeyAuthored ? stats[scalingKeyAuthored] : null;
   const effectiveScalingValue =
     scalingKeyAuthored === 'atk' && typeof rawScalingValue === 'number'
-      ? rawScalingValue * (1 + aiAtkPercentBonus / 100)
+      ? rawScalingValue * (1 + atkPercentBonus / 100)
       : rawScalingValue;
 
   const brokenMultiplier = calcEnemyBroken ? 1.0 : 0.9;
 
-  function computeAuthoredHit(multiplierPercent, dmgPercentOverride = aiDmgPercent) {
+  function computeAuthoredHit(multiplierPercent, dmgPercentOverride = dmgPercent) {
     if (isElation) {
       return computeElationDamage({
         abilityMultiplierPercent: multiplierPercent,
@@ -1000,7 +1000,7 @@ function computeScenarioTotalDamage(stats, scenario) {
         critDmgPercent: effectiveCritDmgPercent,
         enemyResPercent: effectiveEnemyRes,
         defReductionPercent: effectiveDefShred,
-        vulnerabilityPercent: aiVulnerabilityPercent,
+        vulnerabilityPercent: vulnerabilityPercent,
         brokenMultiplier,
       });
     }
@@ -1015,7 +1015,7 @@ function computeScenarioTotalDamage(stats, scenario) {
       elementalDmgPercent: elementalDmgPercent + allDmgPercent + dmgPercentOverride,
       critRatePercent: effectiveCritRatePercent,
       critDmgPercent: effectiveCritDmgPercent,
-      vulnerabilityPercent: aiVulnerabilityPercent,
+      vulnerabilityPercent: vulnerabilityPercent,
       brokenMultiplier,
     });
   }
@@ -1038,13 +1038,13 @@ function computeScenarioTotalDamage(stats, scenario) {
   if (calcAuthoredBlastAdjacentMultiplierPercent != null) {
     const adjacentTargetCount = Math.max(0, Math.min(2, calcEnemyCount - 1));
     if (adjacentTargetCount > 0) {
-      // aiDmgPercentAdjacentPortion is the FULL adjacent-hit sum already
+      // dmgPercentAdjacentPortion is the FULL adjacent-hit sum already
       // (unrestricted conditionals + ADJACENT-restricted ones) — do not
-      // add aiDmgPercent on top, that would double-count anything without
+      // add dmgPercent on top, that would double-count anything without
       // a restrictedToBlastPortion (i.e. every pre-existing conditional).
       const adjacentHit = computeAuthoredHit(
         calcAuthoredBlastAdjacentMultiplierPercent,
-        aiDmgPercentAdjacentPortion
+        dmgPercentAdjacentPortion
       );
       if (adjacentHit != null) totalDamage += adjacentHit * adjacentTargetCount;
     }
@@ -2305,18 +2305,18 @@ export default function ProfilePage() {
                 // conditional regardless of which row(s) it actually
                 // applies to, since that per-row filtering already happens
                 // correctly inside computeScenarioTotalDamage itself.
-                const aiResPenPercent = allConditionals.reduce((sum, c) => {
+                const resPenPercent = allConditionals.reduce((sum, c) => {
                   if (c.statType !== 'RES_PEN') return sum;
                   const stacks = authoredConditionalStacks[c.name] || 0;
                   return sum + (c.valuesByStack[stacks - 1] || 0);
                 }, 0);
-                const aiDefPenPercent = allConditionals.reduce((sum, c) => {
+                const defPenPercent = allConditionals.reduce((sum, c) => {
                   if (c.statType !== 'DEF_PEN') return sum;
                   const stacks = authoredConditionalStacks[c.name] || 0;
                   return sum + (c.valuesByStack[stacks - 1] || 0);
                 }, 0);
-                const effectiveEnemyRes = calcEnemyRes - aiResPenPercent;
-                const effectiveDefShred = calcDefShred + aiDefPenPercent;
+                const effectiveEnemyRes = calcEnemyRes - resPenPercent;
+                const effectiveDefShred = calcDefShred + defPenPercent;
 
                 // Per-row derived info for display: the matching real skill
                 // (for its level cap and description) and any hand-authored
@@ -2636,7 +2636,7 @@ export default function ProfilePage() {
                         <div className="compare-weight-row">
                           <span>
                             Enemy RES %
-                            {aiResPenPercent > 0 && ` (${effectiveEnemyRes}% effective, -${aiResPenPercent}% detected)`}
+                            {resPenPercent > 0 && ` (${effectiveEnemyRes}% effective, -${resPenPercent}% detected)`}
                           </span>
                           <input
                             type="number"
@@ -2647,7 +2647,7 @@ export default function ProfilePage() {
                         <div className="compare-weight-row">
                           <span>
                             DEF Shred %
-                            {aiDefPenPercent > 0 && ` (${effectiveDefShred}% effective, +${aiDefPenPercent}% detected)`}
+                            {defPenPercent > 0 && ` (${effectiveDefShred}% effective, +${defPenPercent}% detected)`}
                           </span>
                           <input
                             type="number"
