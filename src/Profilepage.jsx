@@ -825,8 +825,8 @@ function computeScenarioTotalDamage(stats, scenario) {
     calcElationBreakdownOut,
   } = scenario;
 
-  if (!stats) return null;
-  if (calcAuthoredMultiplierPercent == null) return null;
+  if (!stats) return null; // can only be null if promotions is null (promotions is pulled from StarRailRes)
+  if (calcAuthoredMultiplierPercent == null) return null; // for entries in the row that don't do damage, they get left out of the final result
 
   const elementalDmgPercent =
     elementDmgType && stats.genericStats[elementDmgType] ? stats.genericStats[elementDmgType] * 100 : 0;
