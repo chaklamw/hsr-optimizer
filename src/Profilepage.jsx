@@ -872,7 +872,7 @@ function computeScenarioTotalDamage(stats, scenario) {
     const rowDrivenCount = c.sourceAbilityName
       ? calcSourceAbilityTriggerCounts?.[c.sourceAbilityName]
       : undefined;
-    if (rowDrivenCount != null) {
+    if (rowDrivenCount != null) { // user input (number that the user put for number of triggers in this turn)
       return c.maxStacks ? Math.min(c.maxStacks, rowDrivenCount) : rowDrivenCount;
     }
     const abilityCastCount = c.stackSourceAbilityName
@@ -881,7 +881,7 @@ function computeScenarioTotalDamage(stats, scenario) {
     if (abilityCastCount != null) {
       return c.maxStacks ? Math.min(c.maxStacks, abilityCastCount) : abilityCastCount;
     }
-    if (c.resourceStackThreshold?.pointsPerStack) {
+    if (c.resourceStackThreshold?.pointsPerStack) { // automatically assuming that punchline can be converted to resources, needs to expand
       const derivedCount = Math.floor(
         Math.max(0, calcPunchlineValue) / c.resourceStackThreshold.pointsPerStack
       );
