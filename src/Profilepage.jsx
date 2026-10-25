@@ -849,6 +849,10 @@ function computeScenarioTotalDamage(stats, scenario) {
     .filter((c) => conditionalTraceIsUnlocked(c, unlockedTraceNames))
     .map((c) => withResolvedValuesByStack(c, activeCharacter, skillTrees, characterSkills));
 
+  // The block below is useful for debugging, in order to find out why a conditional is not
+  // applying to a specific ability.
+  // To use it, in the browser console, type 'window.__debugAuthoredConditionalMatching = true'
+  // and then change an input to trigger a recalculation to see the output.
   if (typeof window !== 'undefined' && window.__debugAuthoredConditionalMatching) {
     console.log('[AUTHORED ROW]', {
       calcAuthoredAbilityName,
