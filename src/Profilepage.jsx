@@ -932,7 +932,7 @@ function computeScenarioTotalDamage(stats, scenario) {
       ATK_PERCENT: atkPercentBonus,
     };
     const split = computeStatOverflowSplit(baseValueByStat[overflow.primaryStat] ?? 0, calcPunchlineValue, overflow);
-    const applyBonus = (statKey, bonus) => {
+    const applyBonus = (statKey, bonus) => { // needs to be expanded to include other stats
       if (statKey === 'CRIT_RATE') overflowCritRateBonus += bonus;
       else if (statKey === 'CRIT_DMG') overflowCritDmgBonus += bonus;
       else if (statKey === 'DMG_PERCENT') dmgPercent += bonus;
