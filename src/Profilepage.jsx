@@ -947,7 +947,7 @@ function computeScenarioTotalDamage(stats, scenario) {
   const elationFlatAddPercent = sumConditionalStat('ELATION_PERCENT_FLAT_ADD');
   const atkThresholdConditional = matchedAll.find((c) => c.statType === 'ELATION_PERCENT_ATK_THRESHOLD');
   let elationFromAtkThreshold = 0;
-  if (atkThresholdConditional?.atkThreshold && typeof stats.atk === 'number') {
+  if (atkThresholdConditional?.atkThreshold && typeof stats.atk === 'number') { // reads live ATK values and computes elation bonuses based on atk past a threshold (e.g Sparxie)
     const { baseAtk, atkPerUnit, elationPercentPerUnit, capPercent } = atkThresholdConditional.atkThreshold;
     const effectiveAtkForThreshold = stats.atk * (1 + atkPercentBonus / 100);
     const unitsOverThreshold = Math.max(0, effectiveAtkForThreshold - baseAtk) / atkPerUnit;
