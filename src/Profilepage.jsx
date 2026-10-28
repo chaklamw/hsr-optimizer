@@ -959,7 +959,7 @@ function computeScenarioTotalDamage(stats, scenario) {
   if (spdThresholdConditional?.spdThreshold && typeof stats.spd === 'number') {
     const { baseSpd, basePercent, spdPerUnit, elationPercentPerUnit, maxExcessSpd } =
       spdThresholdConditional.spdThreshold;
-    if (stats.spd >= baseSpd) {
+    if (stats.spd >= baseSpd) { // this is assuming spd converts to elation (mainly meant for Silver Wolf LV 999), need to find a better way to expand upon this
       const excessSpd = Math.min(maxExcessSpd, stats.spd - baseSpd);
       elationFromSpdThreshold = basePercent + (excessSpd / spdPerUnit) * elationPercentPerUnit;
     }
