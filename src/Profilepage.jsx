@@ -965,7 +965,7 @@ function computeScenarioTotalDamage(stats, scenario) {
     }
   }
 
-  const elationSelfScaledConditional = matchedAll.find((c) => c.statType === 'ELATION_PERCENT_OF_SELF');
+  const elationSelfScaledConditional = matchedAll.find((c) => c.statType === 'ELATION_PERCENT_OF_SELF'); // e.g Yao Guang skill
   let effectiveElationPercent =
     elationPercent + elationFlatAddPercent + elationFromAtkThreshold + elationFromSpdThreshold;
   if (elationSelfScaledConditional) {
